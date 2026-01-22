@@ -133,9 +133,12 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, onUpgrade })
 
       {/* Footer */}
       <div className="p-6 border-t border-slate-100">
-        <button className="flex items-center gap-2 text-slate-500 hover:text-slate-800 transition-colors w-full">
+        <button 
+          onClick={() => onNavigate('signout')}
+          className="flex items-center gap-2 text-slate-500 hover:text-slate-800 transition-colors w-full"
+        >
           <LogOut size={20} />
-          <span className="text-sm font-medium">Sign Out</span>
+          <span className="text-sm font-medium">Sign Out (Demo Auth)</span>
         </button>
       </div>
     </aside>

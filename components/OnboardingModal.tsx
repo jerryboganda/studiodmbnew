@@ -19,14 +19,24 @@ const OnboardingModal: React.FC<OnboardingModalProps> = ({ onClose }) => {
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div className="bg-white w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Header */}
-        <div className="h-16 border-b border-slate-100 flex items-center justify-between px-6 bg-white">
-            <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1">
+        <div className="h-20 border-b border-slate-100 flex items-center justify-between px-6 bg-white">
+            <div className="flex flex-col">
+                <h3 className="text-sm font-bold text-slate-900">Profile Setup</h3>
+                {/* Stepper with Context */}
+                <div className="flex items-center gap-1.5 mt-1">
+                    <div className="flex items-center gap-1">
+                        <div className="h-1.5 w-6 rounded-full bg-green-500" title="Auth Complete"></div>
+                        <span className="text-[10px] font-bold text-green-600 hidden sm:inline">Auth</span>
+                    </div>
+                    <span className="text-slate-300 text-[10px]">•</span>
+                    {/* Active Steps */}
                     {[1, 2, 3, 4].map(i => (
-                        <div key={i} className={`h-1.5 w-8 rounded-full transition-colors ${i <= step ? 'bg-primary' : 'bg-slate-100'}`}></div>
+                        <div key={i} className={`h-1.5 w-6 rounded-full transition-colors ${i <= step ? 'bg-primary' : 'bg-slate-100'}`}></div>
                     ))}
+                    <span className="text-slate-300 text-[10px]">•</span>
+                    <div className="h-1.5 w-6 rounded-full bg-slate-100 border border-dashed border-slate-300"></div>
+                    <span className="text-[10px] font-medium text-slate-400 hidden sm:inline">Verification</span>
                 </div>
-                <span className="text-xs font-bold text-slate-400 ml-2">Step {step} of {totalSteps}</span>
             </div>
             <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600 transition-colors">
                 <X size={20} />
@@ -200,7 +210,7 @@ const OnboardingModal: React.FC<OnboardingModalProps> = ({ onClose }) => {
                 onClick={step === totalSteps ? onClose : nextStep}
                 className="bg-primary hover:bg-primary-hover text-white px-8 py-3 rounded-full font-bold text-sm flex items-center gap-2 shadow-lg shadow-primary/20 transition-all"
             >
-                {step === totalSteps ? 'Complete Setup' : 'Continue'}
+                {step === totalSteps ? 'Complete & Continue' : 'Continue'}
                 {step !== totalSteps && <ArrowRight size={16} />}
             </button>
         </div>

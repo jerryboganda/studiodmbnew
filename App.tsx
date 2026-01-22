@@ -16,15 +16,23 @@ import FamilyPortalView from './components/FamilyPortalView';
 import CommunityView from './components/CommunityView';
 import ProgressionView from './components/ProgressionView';
 import NotificationsView from './components/NotificationsView';
+import AuthModal from './components/AuthModal';
+import WelcomeScreen from './components/WelcomeScreen';
 import { Bell } from 'lucide-react';
 import { ProfileMatch } from './types';
 
 const App: React.FC = () => {
+  // Auth State: Starts false to show Welcome Screen
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  
   const [currentView, setCurrentView] = useState('dashboard');
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showDeclineModal, setShowDeclineModal] = useState(false);
   const [proposalTarget, setProposalTarget] = useState<ProfileMatch | null>(null);
   
+  // Auth Modal State (for re-auth inside app)
+  const [showAuthModal, setShowAuthModal] = useState(false);
+
   // Billing & Subscription State
   const [showSubscription, setShowSubscription] = useState(false);
   const [checkoutItem, setCheckoutItem] = useState<{name: string, amount: number} | null>(null);
@@ -34,11 +42,27 @@ const App: React.FC = () => {
       setCheckoutItem({ name, amount });
   };
 
+  const handleSignOut = () => {
+      setIsAuthenticated(false);
+      setCurrentView('dashboard'); // Reset view on sign out
+  }
+
+  // Render Welcome Screen if not authenticated
+  if (!isAuthenticated) {
+      return <WelcomeScreen onComplete={() => setIsAuthenticated(true)} />;
+  }
+
   return (
     <div className="flex h-screen w-full bg-background-light">
       <Sidebar 
         currentView={currentView} 
-        onNavigate={setCurrentView} 
+        onNavigate={(view) => {
+            if (view === 'signout') {
+                handleSignOut();
+            } else {
+                setCurrentView(view);
+            }
+        }} 
         onUpgrade={() => setShowSubscription(true)}
       />
       
@@ -126,6 +150,13 @@ const App: React.FC = () => {
             planName={checkoutItem.name}
             amount={checkoutItem.amount}
             onClose={() => setCheckoutItem(null)}
+          />
+      )}
+
+      {showAuthModal && (
+          <AuthModal 
+            onClose={() => setShowAuthModal(false)} 
+            onLogin={() => setShowAuthModal(false)}
           />
       )}
       

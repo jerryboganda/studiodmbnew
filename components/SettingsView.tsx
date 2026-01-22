@@ -2,9 +2,12 @@ import React, { useState } from 'react';
 import { 
     Shield, Smartphone, Mail, Globe, Users, Lock, Eye, EyeOff, PauseCircle, Download, FileText, 
     Check, ChevronRight, UserCog, ShieldCheck, Siren, Ban, UserX, ScanFace, Building2,
-    Ghost, Fingerprint, Trash2, Key, History, Umbrella, CreditCard, Receipt, Gift
+    Ghost, Fingerprint, Trash2, Key, History, Umbrella, CreditCard, Receipt, Gift,
+    UserPlus, SmartphoneNfc, LogOut, Laptop, Tablet, Bell
 } from 'lucide-react';
 import VerificationModal from './VerificationModal';
+import StepUpVerificationModal from './StepUpVerificationModal';
+import TwoFactorSetupModal from './TwoFactorSetupModal';
 
 interface SettingsViewProps {
   onLaunchOnboarding: () => void;
@@ -12,14 +15,45 @@ interface SettingsViewProps {
 }
 
 const SettingsView: React.FC<SettingsViewProps> = ({ onLaunchOnboarding, onOpenBilling }) => {
-  const [activeTab, setActiveTab] = useState<'account' | 'privacy' | 'safety' | 'billing'>('billing');
+  const [activeTab, setActiveTab] = useState<'account' | 'privacy' | 'safety' | 'billing'>('account');
   const [managementMode, setManagementMode] = useState<'self' | 'family' | 'matchmaker' | 'dual'>('self');
   const [snoozeEnabled, setSnoozeEnabled] = useState(false);
   const [showVerification, setShowVerification] = useState(false);
+  const [stepUpAction, setStepUpAction] = useState<string | null>(null);
+  
+  // 2FA State
+  const [is2FAEnabled, setIs2FAEnabled] = useState(false);
+  const [show2FAModal, setShow2FAModal] = useState(false);
+
+  // Device Management State
+  const [devices, setDevices] = useState([
+      { id: 1, name: 'Chrome on MacBook Pro', location: 'New Delhi, India', lastActive: 'Active Now', type: 'desktop', current: true },
+      { id: 2, name: 'iPhone 14 Pro', location: 'New Delhi, India', lastActive: '2 hours ago', type: 'mobile', current: false },
+      { id: 3, name: 'iPad Air', location: 'Mumbai, India', lastActive: '3 days ago', type: 'tablet', current: false },
+  ]);
+  const [loginAlerts, setLoginAlerts] = useState({ email: true, sms: false });
 
   // Privacy State
   const [incognito, setIncognito] = useState(false);
   const [watermark, setWatermark] = useState(true);
+
+  // Recovery State
+  const [trustedContact, setTrustedContact] = useState<{name: string, relation: string} | null>(null);
+
+  const handleStepUpSuccess = () => {
+      setStepUpAction(null);
+      // In a real app, perform the sensitive action here
+      alert("Verification Successful! Action authorized.");
+  };
+
+  const handleRevokeDevice = (id: number) => {
+      setDevices(devices.filter(d => d.id !== id));
+  };
+
+  const handleRevokeAll = () => {
+      setDevices(devices.filter(d => d.current));
+      alert("Signed out of all other devices.");
+  };
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden">
@@ -32,7 +66,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onLaunchOnboarding, onOpenB
                 onClick={() => setActiveTab('account')}
                 className={`text-sm font-bold transition-colors border-b-2 pb-0.5 ${activeTab === 'account' ? 'text-primary border-primary' : 'text-slate-500 border-transparent hover:text-slate-700'}`}
             >
-                Account
+                Account & Security
             </button>
              <button 
                 onClick={() => setActiveTab('billing')}
@@ -74,40 +108,151 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onLaunchOnboarding, onOpenB
                     <SectionHeader title="Access Credentials" icon={<Shield size={20} className="text-primary" />} />
                     
                     <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                    <div className="p-6 border-b border-slate-100">
-                        <h4 className="font-bold text-slate-900 mb-4">Registration & Login Methods</h4>
-                        <div className="space-y-4">
-                        <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                            <div className="flex items-center gap-3">
-                            <div className="size-10 bg-white rounded-full flex items-center justify-center border border-slate-200">
-                                <Mail size={18} className="text-slate-600" />
+                        <div className="p-6 border-b border-slate-100">
+                            <h4 className="font-bold text-slate-900 mb-4">Registration & Login Methods</h4>
+                            <div className="space-y-4">
+                                <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                                    <div className="flex items-center gap-3">
+                                        <div className="size-10 bg-white rounded-full flex items-center justify-center border border-slate-200">
+                                            <Mail size={18} className="text-slate-600" />
+                                        </div>
+                                        <div>
+                                            <p className="text-sm font-bold text-slate-900">Email Address</p>
+                                            <p className="text-xs text-slate-500">dr.rajesh@example.com</p>
+                                        </div>
+                                    </div>
+                                    <span className="flex items-center gap-1 text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded-full">
+                                        <Check size={12} /> Verified
+                                    </span>
+                                </div>
+
+                                <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                                    <div className="flex items-center gap-3">
+                                        <div className="size-10 bg-white rounded-full flex items-center justify-center border border-slate-200">
+                                            <Smartphone size={18} className="text-slate-600" />
+                                        </div>
+                                        <div>
+                                            <p className="text-sm font-bold text-slate-900">Phone OTP</p>
+                                            <p className="text-xs text-slate-500">+91 98765 XXXXX</p>
+                                        </div>
+                                    </div>
+                                    <span className="flex items-center gap-1 text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded-full">
+                                        <Check size={12} /> Verified
+                                    </span>
+                                </div>
                             </div>
-                            <div>
-                                <p className="text-sm font-bold text-slate-900">Email Address</p>
-                                <p className="text-xs text-slate-500">dr.rajesh@example.com</p>
-                            </div>
-                            </div>
-                            <span className="flex items-center gap-1 text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded-full">
-                            <Check size={12} /> Verified
-                            </span>
                         </div>
 
-                        <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                            <div className="flex items-center gap-3">
-                            <div className="size-10 bg-white rounded-full flex items-center justify-center border border-slate-200">
-                                <Smartphone size={18} className="text-slate-600" />
+                        {/* Recoverability Section */}
+                        <div className="p-6 bg-slate-50/50">
+                            <div className="flex justify-between items-center mb-4">
+                                <h4 className="font-bold text-slate-900 flex items-center gap-2">
+                                    <Key size={16} className="text-orange-500" /> Account Recovery
+                                </h4>
+                                <span className="text-[10px] bg-orange-100 text-orange-700 px-2 py-1 rounded-full font-bold">Recommended</span>
                             </div>
-                            <div>
-                                <p className="text-sm font-bold text-slate-900">Phone OTP</p>
-                                <p className="text-xs text-slate-500">+91 98765 XXXXX</p>
+                            
+                            <div className="space-y-3">
+                                {!trustedContact ? (
+                                    <button 
+                                        onClick={() => setTrustedContact({name: 'Amit Kumar', relation: 'Brother'})}
+                                        className="w-full p-3 border-2 border-dashed border-slate-300 rounded-xl flex items-center justify-center gap-2 text-slate-500 hover:border-primary hover:text-primary hover:bg-white transition-all"
+                                    >
+                                        <UserPlus size={18} />
+                                        <span className="text-sm font-bold">Add Trusted Contact</span>
+                                    </button>
+                                ) : (
+                                    <div className="p-3 bg-white border border-slate-200 rounded-xl flex justify-between items-center">
+                                        <div className="flex items-center gap-3">
+                                            <div className="size-8 bg-green-100 text-green-600 rounded-full flex items-center justify-center">
+                                                <ShieldCheck size={16} />
+                                            </div>
+                                            <div>
+                                                <p className="text-sm font-bold text-slate-900">{trustedContact.name}</p>
+                                                <p className="text-xs text-slate-500">{trustedContact.relation} • Can help recover account</p>
+                                            </div>
+                                        </div>
+                                        <button onClick={() => setTrustedContact(null)} className="text-xs text-red-500 font-bold hover:underline">Remove</button>
+                                    </div>
+                                )}
+                                <p className="text-xs text-slate-400 leading-relaxed">
+                                    Trusted contacts can verify your identity if you lose access to your phone/email.
+                                </p>
                             </div>
-                            </div>
-                            <span className="flex items-center gap-1 text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded-full">
-                            <Check size={12} /> Verified
-                            </span>
-                        </div>
                         </div>
                     </div>
+
+                    {/* Active Sessions & Devices */}
+                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                        <div className="flex justify-between items-center mb-6">
+                            <h4 className="font-bold text-slate-900 flex items-center gap-2">
+                                <SmartphoneNfc size={18} className="text-slate-600" /> Device Management
+                            </h4>
+                            {devices.length > 1 && (
+                                <button 
+                                    onClick={handleRevokeAll}
+                                    className="text-xs font-bold text-red-600 border border-red-200 px-3 py-1.5 rounded-lg hover:bg-red-50 transition-colors"
+                                >
+                                    Sign out other devices
+                                </button>
+                            )}
+                        </div>
+
+                        <div className="space-y-3">
+                            {devices.map(device => (
+                                <div key={device.id} className="flex items-center justify-between p-3 border border-slate-100 rounded-lg hover:bg-slate-50 transition-colors">
+                                    <div className="flex items-center gap-3">
+                                        <div className={`size-10 rounded-full flex items-center justify-center ${device.current ? 'bg-green-100 text-green-600' : 'bg-slate-100 text-slate-500'}`}>
+                                            {device.type === 'mobile' ? <Smartphone size={20} /> : device.type === 'tablet' ? <Tablet size={20} /> : <Laptop size={20} />}
+                                        </div>
+                                        <div>
+                                            <div className="flex items-center gap-2">
+                                                <p className="text-sm font-bold text-slate-900">{device.name}</p>
+                                                {device.current && <span className="text-[10px] font-bold bg-green-100 text-green-700 px-1.5 py-0.5 rounded uppercase tracking-wider">This Device</span>}
+                                            </div>
+                                            <p className="text-xs text-slate-500 flex items-center gap-1">
+                                                {device.location} • <span className={device.current ? 'text-green-600 font-bold' : ''}>{device.lastActive}</span>
+                                            </p>
+                                        </div>
+                                    </div>
+                                    {!device.current && (
+                                        <button 
+                                            onClick={() => handleRevokeDevice(device.id)}
+                                            className="text-xs font-bold text-slate-400 hover:text-red-600 p-2 hover:bg-red-50 rounded-lg transition-colors"
+                                            title="Sign Out"
+                                        >
+                                            <LogOut size={16} />
+                                        </button>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+
+                        <div className="mt-6 pt-6 border-t border-slate-100">
+                            <h5 className="text-sm font-bold text-slate-900 mb-3 flex items-center gap-2">
+                                <Bell size={16} className="text-orange-500" /> Security Alerts
+                            </h5>
+                            <div className="space-y-3">
+                                <label className="flex items-center justify-between cursor-pointer group">
+                                    <span className="text-sm text-slate-600 group-hover:text-slate-900">Email me when a new device logs in</span>
+                                    <input 
+                                        type="checkbox" 
+                                        checked={loginAlerts.email}
+                                        onChange={(e) => setLoginAlerts({...loginAlerts, email: e.target.checked})}
+                                        className="accent-primary size-4"
+                                    />
+                                </label>
+                                <label className="flex items-center justify-between cursor-pointer group">
+                                    <span className="text-sm text-slate-600 group-hover:text-slate-900">Send SMS alert for unknown locations</span>
+                                    <input 
+                                        type="checkbox" 
+                                        checked={loginAlerts.sms}
+                                        onChange={(e) => setLoginAlerts({...loginAlerts, sms: e.target.checked})}
+                                        className="accent-primary size-4"
+                                    />
+                                </label>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -146,7 +291,10 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onLaunchOnboarding, onOpenB
 
                         <div className="border-t border-slate-100 pt-6">
                             <h4 className="font-bold text-slate-900 mb-3">Ownership Controls</h4>
-                            <button className="w-full flex items-center justify-between p-3 border border-slate-200 rounded-lg hover:border-slate-300 transition-colors group">
+                            <button 
+                                onClick={() => setStepUpAction("transfer ownership")}
+                                className="w-full flex items-center justify-between p-3 border border-slate-200 rounded-lg hover:border-slate-300 transition-colors group"
+                            >
                                 <div className="flex items-center gap-3">
                                     <div className="size-8 bg-slate-100 rounded-full flex items-center justify-center">
                                         <Users size={16} className="text-slate-600" />
@@ -159,6 +307,44 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onLaunchOnboarding, onOpenB
                                 <ChevronRight size={18} className="text-slate-400 group-hover:text-slate-600" />
                             </button>
                         </div>
+                    </div>
+
+                    <div className={`rounded-xl shadow-sm border p-6 transition-colors ${!is2FAEnabled ? 'bg-orange-50 border-orange-200' : 'bg-white border-slate-200'}`}>
+                         <div className="flex items-center justify-between mb-2">
+                             <h4 className="font-bold text-slate-900 flex items-center gap-2">
+                                Two-Factor Authentication
+                                {!is2FAEnabled ? (
+                                    <span className="bg-orange-200 text-orange-800 text-[10px] px-2 py-0.5 rounded-full font-bold">Recommended</span>
+                                ) : (
+                                    <span className="bg-green-100 text-green-700 text-[10px] px-2 py-0.5 rounded-full font-bold flex items-center gap-1"><Check size={10} /> Active</span>
+                                )}
+                             </h4>
+                             <label className="relative inline-flex items-center cursor-pointer">
+                                <input 
+                                    type="checkbox" 
+                                    className="sr-only peer" 
+                                    checked={is2FAEnabled}
+                                    onChange={() => {
+                                        if (!is2FAEnabled) {
+                                            setShow2FAModal(true);
+                                        } else {
+                                            setIs2FAEnabled(false);
+                                        }
+                                    }}
+                                />
+                                <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+                            </label>
+                         </div>
+                         <p className="text-xs text-slate-500">
+                             Secure your account with an additional layer of protection via Authenticator App, SMS, or Email.
+                         </p>
+                         {is2FAEnabled && (
+                             <div className="mt-4 flex gap-2">
+                                 <button onClick={() => setShow2FAModal(true)} className="text-xs font-bold text-primary hover:underline">Reconfigure</button>
+                                 <span className="text-slate-300">|</span>
+                                 <button className="text-xs font-bold text-slate-500 hover:text-slate-800">View Backup Codes</button>
+                             </div>
+                         )}
                     </div>
                 </div>
               </div>
@@ -408,7 +594,10 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onLaunchOnboarding, onOpenB
                                   <ChevronRight size={16} />
                               </button>
 
-                              <button className="w-full flex items-center justify-between p-2 text-red-600 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors">
+                              <button 
+                                onClick={() => setStepUpAction("delete account")}
+                                className="w-full flex items-center justify-between p-2 text-red-600 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors"
+                              >
                                   <div className="flex items-center gap-2">
                                       <Trash2 size={16} />
                                       <span className="text-sm font-bold">Delete Account</span>
@@ -540,6 +729,22 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onLaunchOnboarding, onOpenB
       </div>
 
       {showVerification && <VerificationModal onClose={() => setShowVerification(false)} />}
+      {stepUpAction && (
+          <StepUpVerificationModal 
+            actionLabel={stepUpAction} 
+            onCancel={() => setStepUpAction(null)}
+            onVerified={handleStepUpSuccess}
+          />
+      )}
+      {show2FAModal && (
+          <TwoFactorSetupModal 
+            onClose={() => setShow2FAModal(false)}
+            onComplete={() => {
+                setIs2FAEnabled(true);
+                setShow2FAModal(false);
+            }}
+          />
+      )}
     </div>
   );
 };
