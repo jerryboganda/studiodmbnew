@@ -35,6 +35,12 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
   const [password, setPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+    const [firstName, setFirstName] = useState('');
+    const [lastName, setLastName] = useState('');
+    const [email, setEmail] = useState('');
+    const [phone, setPhone] = useState('');
+    const [gender, setGender] = useState<'male' | 'female' | ''>('');
+    const [dateOfBirth, setDateOfBirth] = useState('');
   const [backupCode, setBackupCode] = useState('');
   const [signOutAll, setSignOutAll] = useState(true);
   const [recoveryContact, setRecoveryContact] = useState('');
@@ -112,6 +118,8 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
             
             // For now, let's keep the country code hardcoded as per Laravel's default fallback logic (+92/India as per UI)
             const phone = identifier.startsWith('+') ? identifier : `+91${identifier}`;
+            setPhone(phone);
+            setEmail('');
             
             await api.post('/send-phone-verification', { phone });
             
@@ -128,6 +136,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
                 setIsLoading(false);
                 return;
             }
+            setEmail(identifier);
             
             await api.post('/send-email-verification', { email: identifier });
             
@@ -172,6 +181,8 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
                       onComplete();
                   } else {
                       // New user, verified phone, go to profile creation/account setup
+                      setPhone(phone);
+                      setEmail('');
                       setStep('create-password');
                   }
               } else {
@@ -186,6 +197,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
                       onComplete();
                   } else {
                       // New user
+                      setEmail(identifier);
                       setStep('create-password');
                   }
               } else {
@@ -268,6 +280,30 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
   };
 
   const handleCreateAccount = () => {
+      if (!firstName || !lastName) {
+          setError('Please enter your first and last name.');
+          return;
+      }
+      if (!email || !email.includes('@')) {
+          setError('Please enter a valid email address.');
+          return;
+      }
+      if (!phone || phone.replace(/\D/g, '').length < 10) {
+          setError('Please enter a valid phone number.');
+          return;
+      }
+      if (!gender) {
+          setError('Please select your gender.');
+          return;
+      }
+      if (!dateOfBirth) {
+          setError('Please select your date of birth.');
+          return;
+      }
+      if (newPassword !== confirmPassword) {
+          setError('Passwords do not match.');
+          return;
+      }
       if (strengthScore < 3) {
           setError('Password is too weak. Please meet the requirements.');
           return;
@@ -276,8 +312,36 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
           setError('This password has been exposed in data breaches. Please choose a different one.');
           return;
       }
-      // Success
-      onComplete();
+
+      setIsLoading(true);
+      setError('');
+
+      const payload = {
+          first_name: firstName,
+          last_name: lastName,
+          email,
+          phone: phone.startsWith('+') ? phone : `+91${phone.replace(/\D/g, '')}`,
+          gender,
+          on_behalf: parseInt(profileFor, 10),
+          date_of_birth: dateOfBirth,
+          password: newPassword,
+          password_confirmation: confirmPassword,
+      };
+
+      api.post('/signup', payload)
+          .then((res) => {
+              if (res.data?.result && res.data?.access_token) {
+                  setAuth(res.data.user, res.data.access_token);
+                  onComplete();
+              } else {
+                  setError(res.data?.message || 'Unable to create account.');
+              }
+          })
+          .catch((err) => {
+              const message = parseApiError(err);
+              setError(Array.isArray(message) ? message.join(', ') : message);
+          })
+          .finally(() => setIsLoading(false));
   }
 
   const handleRecoveryStart = () => {
@@ -777,6 +841,87 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
                             )}
 
                             <div className="space-y-4">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div className="relative">
+                                        <input
+                                            type="text"
+                                            value={firstName}
+                                            onChange={(e) => {
+                                                setFirstName(e.target.value);
+                                                setError('');
+                                            }}
+                                            placeholder="First name"
+                                            className="w-full h-14 px-4 bg-white border border-slate-300 rounded-xl font-medium text-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all"
+                                        />
+                                    </div>
+                                    <div className="relative">
+                                        <input
+                                            type="text"
+                                            value={lastName}
+                                            onChange={(e) => {
+                                                setLastName(e.target.value);
+                                                setError('');
+                                            }}
+                                            placeholder="Last name"
+                                            className="w-full h-14 px-4 bg-white border border-slate-300 rounded-xl font-medium text-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="relative">
+                                    <input
+                                        type="email"
+                                        value={email}
+                                        onChange={(e) => {
+                                            setEmail(e.target.value);
+                                            setError('');
+                                        }}
+                                        placeholder="Email address"
+                                        className="w-full h-14 px-4 bg-white border border-slate-300 rounded-xl font-medium text-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all"
+                                    />
+                                </div>
+
+                                <div className="relative">
+                                    <input
+                                        type="tel"
+                                        value={phone}
+                                        onChange={(e) => {
+                                            setPhone(e.target.value);
+                                            setError('');
+                                        }}
+                                        placeholder="Phone number"
+                                        className="w-full h-14 px-4 bg-white border border-slate-300 rounded-xl font-medium text-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all"
+                                    />
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div className="relative">
+                                        <select
+                                            value={gender}
+                                            onChange={(e) => {
+                                                setGender(e.target.value as 'male' | 'female' | '');
+                                                setError('');
+                                            }}
+                                            className="w-full h-14 px-4 bg-white border border-slate-300 rounded-xl font-medium text-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all"
+                                        >
+                                            <option value="">Select gender</option>
+                                            <option value="male">Male</option>
+                                            <option value="female">Female</option>
+                                        </select>
+                                    </div>
+                                    <div className="relative">
+                                        <input
+                                            type="date"
+                                            value={dateOfBirth}
+                                            onChange={(e) => {
+                                                setDateOfBirth(e.target.value);
+                                                setError('');
+                                            }}
+                                            className="w-full h-14 px-4 bg-white border border-slate-300 rounded-xl font-medium text-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all"
+                                        />
+                                    </div>
+                                </div>
+
                                 <div className="relative">
                                     <input
                                         type={showPassword ? 'text' : 'password'}
