@@ -758,6 +758,75 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
                         </div>
                     )}
 
+                    {/* Step 4b: Create Password (New User) */}
+                    {step === 'create-password' && (
+                        <div className="space-y-6 animate-in slide-in-from-right">
+                            <button onClick={() => setStep('input')} className="flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-slate-800 mb-4">
+                                <ChevronLeft size={16} /> Back
+                            </button>
+
+                            <div className="text-center mb-6">
+                                <h2 className="text-2xl font-bold text-slate-900">Create Your Password</h2>
+                                <p className="text-slate-500 text-sm mt-1">Set a strong password to finish setup.</p>
+                            </div>
+
+                            {error && (
+                                <p className="text-red-500 text-xs font-bold flex items-center gap-1 animate-in slide-in-from-top-1">
+                                    <AlertCircle size={12} /> {error}
+                                </p>
+                            )}
+
+                            <div className="space-y-4">
+                                <div className="relative">
+                                    <input
+                                        type={showPassword ? 'text' : 'password'}
+                                        value={newPassword}
+                                        onChange={(e) => {
+                                            setNewPassword(e.target.value);
+                                            setError('');
+                                        }}
+                                        placeholder="New password"
+                                        className="w-full h-14 px-4 bg-white border border-slate-300 rounded-xl font-medium text-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all pr-12"
+                                    />
+                                    <button
+                                        onClick={() => setShowPassword(!showPassword)}
+                                        className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                                    >
+                                        {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                                    </button>
+                                </div>
+
+                                <div className="relative">
+                                    <input
+                                        type={showPassword ? 'text' : 'password'}
+                                        value={confirmPassword}
+                                        onChange={(e) => {
+                                            setConfirmPassword(e.target.value);
+                                            setError('');
+                                        }}
+                                        placeholder="Confirm password"
+                                        className="w-full h-14 px-4 bg-white border border-slate-300 rounded-xl font-medium text-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all"
+                                    />
+                                </div>
+
+                                <div className="flex items-center gap-2 text-xs text-slate-500">
+                                    <span className={`inline-block size-2 rounded-full ${strengthScore >= 3 ? 'bg-green-500' : 'bg-yellow-500'}`}></span>
+                                    <span>Password strength: {strengthScore >= 4 ? 'Strong' : strengthScore >= 3 ? 'Good' : 'Weak'}</span>
+                                </div>
+                                {isPasswordBreached && (
+                                    <p className="text-xs text-red-600 font-bold">This password appears in breach lists. Choose another.</p>
+                                )}
+                            </div>
+
+                            <button
+                                onClick={handleCreateAccount}
+                                className="w-full bg-primary text-white py-4 rounded-xl font-bold text-lg hover:bg-primary-hover transition-all shadow-lg shadow-primary/30"
+                            >
+                                Create Account
+                            </button>
+                        </div>
+                    )}
+
                     {/* Step 5: Phone OTP, MFA & Recovery Verification */}
                     {(step === 'otp' || step === 'mfa' || step === 'recovery-verify') && (
                         <>
