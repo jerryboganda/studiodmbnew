@@ -1,13 +1,141 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
     Users, ShieldCheck, FileText, Share2, Download, Plus, CheckCircle2, 
-    Clock, XCircle, ChevronRight, QrCode, Mail, Lock, Heart, Eye
+    Clock, XCircle, ChevronRight, QrCode, Mail, Lock, Heart, Eye, Loader2, Save
 } from 'lucide-react';
 import { CURRENT_USER } from '../constants';
+import api from '../services/api';
+import echo from '../services/echo';
+import { useAuthStore } from '../store/useAuthStore';
+
+interface Guardian {
+    id: number;
+    name: string;
+    relationship: string;
+    email: string;
+    phone: string;
+    is_primary_contact: boolean;
+    created_at: string;
+}
+
+interface Photo {
+    id: number;
+    photo_path: string;
+    caption: string;
+    sort_order: number;
+}
+
+interface Family {
+    id: number;
+    about_description: string;
+    about_parents: string;
+    about_siblings: string;
+    about_relatives: string;
+    location_city: string;
+    location_country: string;
+    tradition_level: string;
+    affluence_level: string;
+    interests: string[];
+    father: string;
+    mother: string;
+    father_occupation: string;
+    mother_occupation: string;
+    guardians: Guardian[];
+    photos: Photo[];
+    approvals?: any[];
+}
 
 const FamilyPortalView: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'profile' | 'guardians' | 'approvals' | 'biodata'>('profile');
   const [showQr, setShowQr] = useState(false);
+  const [family, setFamily] = useState<Family | null>(null);
+  const [loading, setLoading] = useState(true);
+  const { user } = useAuthStore();
+
+  useEffect(() => {
+    fetchFamilyDetails();
+
+    if (user?.id) {
+        const channelName = `family.${user.id}`;
+        echo.private(channelName)
+            .listen('.updated', (e: any) => {
+                console.log('Realtime Family Update:', e);
+                setFamily(e.family);
+            });
+            
+        return () => {
+            echo.leave(channelName);
+        };
+    }
+  }, [user?.id]);
+
+  const fetchFamilyDetails = async () => {
+    try {
+        const response = await api.get('/family/details');
+        if (response.data.result) {
+            setFamily(response.data.data);
+        }
+    } catch (error) {
+        console.error("Failed to fetch family details", error);
+    } finally {
+        setLoading(false);
+    }
+  };
+
+  const handleUpdateProfile = async (data: Partial<Family>) => {
+      try {
+          await api.post('/family/update', data);
+          // Realtime event will update state
+      } catch (error) {
+          console.error("Update failed", error);
+      }
+  };
+
+  const handleAddGuardian = async (data: any) => {
+      try {
+          await api.post('/family/guardian/add', data);
+      } catch (error) {
+          console.error("Add guardian failed", error);
+      }
+  };
+  
+  const handleDeleteGuardian = async (id: number) => {
+      try {
+          await api.delete(`/family/guardian/delete/${id}`);
+      } catch (error) {
+          console.error("Delete guardian failed", error);
+      }
+  };
+
+  const handleUploadPhoto = async (file: File) => {
+      const formData = new FormData();
+      formData.append('photo', file);
+      try {
+          // Assuming api wrapper handles standard post, but for files we might need specific headers if not auto-set
+          await api.post('/family/photo/upload', formData, {
+              headers: { 'Content-Type': 'multipart/form-data' }
+          });
+      } catch (error) {
+          console.error("Upload failed", error);
+      }
+  };
+
+    const handleDeletePhoto = async (id: number) => {
+        try {
+            await api.delete(`/family/photo/delete/${id}`);
+        } catch (error) {
+            console.error("Delete photo failed", error);
+        }
+    };
+
+
+  if (loading && !family) {
+      return (
+          <div className="flex h-full items-center justify-center">
+              <Loader2 className="animate-spin text-primary" size={32} />
+          </div>
+      );
+  }
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-slate-50 relative">
@@ -20,7 +148,7 @@ const FamilyPortalView: React.FC = () => {
         <div className="flex bg-slate-100 p-1 rounded-lg">
             <TabButton label="Family Profile" active={activeTab === 'profile'} onClick={() => setActiveTab('profile')} />
             <TabButton label="Guardians" active={activeTab === 'guardians'} onClick={() => setActiveTab('guardians')} />
-            <TabButton label="Approvals" active={activeTab === 'approvals'} onClick={() => setActiveTab('approvals')} badge="2" />
+            <TabButton label="Approvals" active={activeTab === 'approvals'} onClick={() => setActiveTab('approvals')} badge={family?.approvals?.length ? String(family.approvals.length) : undefined} />
             <TabButton label="Biodata" active={activeTab === 'biodata'} onClick={() => setActiveTab('biodata')} />
         </div>
       </header>
@@ -29,9 +157,9 @@ const FamilyPortalView: React.FC = () => {
       <div className="flex-1 overflow-y-auto p-8 scrollbar-hide">
         <div className="max-w-6xl mx-auto">
             
-            {activeTab === 'profile' && <FamilyProfileSection />}
-            {activeTab === 'guardians' && <GuardiansSection />}
-            {activeTab === 'approvals' && <ApprovalsSection />}
+            {activeTab === 'profile' && <FamilyProfileSection family={family} onUpdate={handleUpdateProfile} onUpload={handleUploadPhoto} onDeletePhoto={handleDeletePhoto} />}
+            {activeTab === 'guardians' && <GuardiansSection guardians={family?.guardians || []} onAdd={handleAddGuardian} onDelete={handleDeleteGuardian} />}
+            {activeTab === 'approvals' && <ApprovalsSection approvals={family?.approvals || []} />}
             {activeTab === 'biodata' && <BiodataSection onShowQr={() => setShowQr(true)} />}
 
         </div>
@@ -56,16 +184,42 @@ const FamilyPortalView: React.FC = () => {
   );
 };
 
+
 /* --- Sections --- */
 
-const FamilyProfileSection = () => (
+const FamilyProfileSection: React.FC<{
+    family: Family | null, 
+    onUpdate: (data: Partial<Family>) => void, 
+    onUpload: (file: File) => void,
+    onDeletePhoto: (id: number) => void
+}> = ({ family, onUpdate, onUpload, onDeletePhoto }) => {
+    const [newInterest, setNewInterest] = useState('');
+    const suggestedInterests = ['Politics', 'Traveling', 'Philanthropy', 'Cricket', 'Music', 'Art', 'Business', 'Education'];
+
+    const addInterest = (interest: string) => {
+        if (!interest.trim()) return;
+        const current = family?.interests || [];
+        if (!current.includes(interest.trim())) {
+            onUpdate({ interests: [...current, interest.trim()] });
+        }
+        setNewInterest('');
+    };
+
+    const removeInterest = (interest: string) => {
+        const current = family?.interests || [];
+        onUpdate({ interests: current.filter(i => i !== interest) });
+    };
+
+    return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 animate-in fade-in slide-in-from-bottom-4">
         <div className="lg:col-span-2 space-y-6">
             <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                 <h3 className="text-lg font-bold text-slate-900 mb-4">About Our Family</h3>
                 <textarea 
                     className="w-full h-32 p-4 border border-slate-200 rounded-xl text-sm focus:border-primary focus:ring-1 focus:ring-primary/20 resize-none"
-                    defaultValue="We are a close-knit family based in South Delhi. Education and humility are our core values. My father served in the Civil Services and my mother is a retired professor. We enjoy classical music and travel."
+                    defaultValue={family?.about_description}
+                    placeholder="Describe your family values, background, and lifestyle..."
+                    onBlur={(e) => onUpdate({ about_description: e.target.value })}
                 ></textarea>
                 <div className="flex justify-end mt-2">
                     <span className="text-xs text-slate-400">Visible to accepted matches</span>
@@ -77,30 +231,116 @@ const FamilyProfileSection = () => (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-2">
                         <label className="text-xs font-bold text-slate-700 uppercase">Tradition Level</label>
-                        <select className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-white">
-                            <option>Modern with Traditional Roots</option>
-                            <option>Liberal</option>
-                            <option>Conservative</option>
+                        <select 
+                            className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-white"
+                            value={family?.tradition_level || ''}
+                            onChange={(e) => onUpdate({ tradition_level: e.target.value })}
+                        >
+                            <option value="">Select Level</option>
+                            <option value="Modern with Traditional Roots">Modern with Traditional Roots</option>
+                            <option value="Liberal">Liberal</option>
+                            <option value="Conservative">Conservative</option>
                         </select>
                     </div>
                     <div className="space-y-2">
                         <label className="text-xs font-bold text-slate-700 uppercase">Affluence / Status</label>
-                        <select className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-white">
-                            <option>Upper Middle Class</option>
-                            <option>High Net Worth (HNI)</option>
-                            <option>Middle Class</option>
+                        <select 
+                            className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-white"
+                            value={family?.affluence_level || ''}
+                            onChange={(e) => onUpdate({ affluence_level: e.target.value })}
+                        >
+                            <option value="">Select Status</option>
+                            <option value="Upper Middle Class">Upper Middle Class</option>
+                            <option value="High Net Worth (HNI)">High Net Worth (HNI)</option>
+                            <option value="Middle Class">Middle Class</option>
+                            <option value="Affluent">Affluent</option>
                         </select>
                     </div>
                 </div>
                 <div className="mt-4">
                      <label className="text-xs font-bold text-slate-700 uppercase mb-2 block">Common Family Interests</label>
                      <div className="flex flex-wrap gap-2">
-                         {['Politics', 'Traveling', 'Philanthropy', 'Cricket'].map(t => (
-                             <span key={t} className="px-3 py-1 bg-slate-100 rounded-full text-xs font-medium text-slate-600 border border-slate-200">{t}</span>
+                         {(family?.interests || []).map(interest => (
+                             <span key={interest} className="px-3 py-1 bg-primary/10 text-primary rounded-full text-xs font-medium flex items-center gap-1">
+                                 {interest}
+                                 <button onClick={() => removeInterest(interest)} className="hover:text-red-500"><XCircle size={12} /></button>
+                             </span>
                          ))}
-                         <button className="px-3 py-1 border border-dashed border-slate-300 rounded-full text-xs text-slate-400 hover:text-primary hover:border-primary">+ Add</button>
+                         <div className="relative">
+                             <input 
+                                 type="text" 
+                                 value={newInterest}
+                                 onChange={(e) => setNewInterest(e.target.value)}
+                                 onKeyDown={(e) => e.key === 'Enter' && addInterest(newInterest)}
+                                 placeholder="+ Add"
+                                 className="px-3 py-1 border border-dashed border-slate-300 rounded-full text-xs text-slate-500 w-20 focus:w-32 transition-all focus:border-primary outline-none"
+                             />
+                         </div>
                      </div>
+                     {newInterest === '' && (
+                         <div className="flex flex-wrap gap-1 mt-2">
+                             {suggestedInterests.filter(s => !(family?.interests || []).includes(s)).slice(0,4).map(s => (
+                                 <button key={s} onClick={() => addInterest(s)} className="px-2 py-0.5 bg-slate-100 rounded text-[10px] text-slate-500 hover:bg-slate-200">{s}</button>
+                             ))}
+                         </div>
+                     )}
                 </div>
+            </div>
+
+            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                 <h3 className="text-lg font-bold text-slate-900 mb-4">Family Details</h3>
+                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-700 uppercase">Father's Name</label>
+                        <input 
+                            type="text" 
+                            className="w-full p-2.5 border border-slate-200 rounded-lg text-sm"
+                            defaultValue={family?.father}
+                            placeholder="Father's Name"
+                            onBlur={(e) => onUpdate({ father: e.target.value })}
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-700 uppercase">Father's Occupation</label>
+                        <input 
+                            type="text" 
+                            className="w-full p-2.5 border border-slate-200 rounded-lg text-sm"
+                            defaultValue={family?.father_occupation}
+                            placeholder="e.g., Civil Services, Business"
+                            onBlur={(e) => onUpdate({ father_occupation: e.target.value })}
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-700 uppercase">Mother's Name</label>
+                        <input 
+                            type="text" 
+                            className="w-full p-2.5 border border-slate-200 rounded-lg text-sm"
+                            defaultValue={family?.mother}
+                            placeholder="Mother's Name"
+                            onBlur={(e) => onUpdate({ mother: e.target.value })}
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-700 uppercase">Mother's Occupation</label>
+                        <input 
+                            type="text" 
+                            className="w-full p-2.5 border border-slate-200 rounded-lg text-sm"
+                            defaultValue={family?.mother_occupation}
+                            placeholder="e.g., Professor, Homemaker"
+                            onBlur={(e) => onUpdate({ mother_occupation: e.target.value })}
+                        />
+                    </div>
+                    <div className="space-y-2 md:col-span-2">
+                        <label className="text-xs font-bold text-slate-700 uppercase">Location</label>
+                         <input 
+                            type="text" 
+                            className="w-full p-2.5 border border-slate-200 rounded-lg text-sm"
+                            defaultValue={family?.location_city}
+                            placeholder="City, Country"
+                            onBlur={(e) => onUpdate({ location_city: e.target.value })}
+                        />
+                    </div>
+                 </div>
             </div>
         </div>
 
@@ -108,13 +348,17 @@ const FamilyProfileSection = () => (
             <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                 <h3 className="text-lg font-bold text-slate-900 mb-4">Family Photos</h3>
                 <div className="grid grid-cols-2 gap-2">
-                    <div className="aspect-square bg-slate-100 rounded-lg flex items-center justify-center text-slate-400 cursor-pointer hover:bg-slate-200 transition-colors">
+                    <label className="aspect-square bg-slate-100 rounded-lg flex items-center justify-center text-slate-400 cursor-pointer hover:bg-slate-200 transition-colors">
                         <Plus size={24} />
-                    </div>
-                    {[1, 2, 3].map(i => (
-                        <div key={i} className="aspect-square bg-slate-200 rounded-lg overflow-hidden relative group">
-                            <img src={`https://source.unsplash.com/random/200x200?family&sig=${i}`} className="w-full h-full object-cover" />
-                            <button className="absolute top-1 right-1 p-1 bg-black/50 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
+                        <input type="file" className="hidden" accept="image/*" onChange={(e) => e.target.files?.[0] && onUpload(e.target.files[0])} />
+                    </label>
+                    {family?.photos?.map(photo => (
+                        <div key={photo.id} className="aspect-square bg-slate-200 rounded-lg overflow-hidden relative group">
+                            <img src={photo.photo_path.startsWith('http') ? photo.photo_path : `/storage/${photo.photo_path}`} className="w-full h-full object-cover" alt="Family" />
+                            <button 
+                                onClick={() => onDeletePhoto(photo.id)}
+                                className="absolute top-1 right-1 p-1 bg-black/50 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500"
+                            >
                                 <XCircle size={14} />
                             </button>
                         </div>
@@ -124,42 +368,63 @@ const FamilyProfileSection = () => (
             </div>
         </div>
     </div>
-);
+    );
+};
 
-const GuardiansSection = () => (
+const GuardiansSection: React.FC<{guardians: Guardian[], onAdd: (d: any) => void, onDelete: (id: number) => void}> = ({ guardians, onAdd, onDelete }) => {
+    const [isAdding, setIsAdding] = useState(false);
+    const [newGuardian, setNewGuardian] = useState({name: '', email: '', relationship: ''});
+
+    const handleSubmit = () => {
+        if (!newGuardian.name || !newGuardian.relationship) return;
+        onAdd(newGuardian);
+        setIsAdding(false);
+        setNewGuardian({name: '', email: '', relationship: ''});
+    };
+
+    return (
     <div className="max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4">
         <div className="flex justify-between items-center mb-6">
             <div>
                 <h3 className="text-lg font-bold text-slate-900">Guardians & Permissions</h3>
                 <p className="text-sm text-slate-500">Control who can manage this profile.</p>
             </div>
-            <button className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg text-sm font-bold hover:bg-slate-800">
+            <button onClick={() => setIsAdding(!isAdding)} className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg text-sm font-bold hover:bg-slate-800">
                 <Plus size={16} /> Invite Member
             </button>
         </div>
 
+        {isAdding && (
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm mb-4 space-y-3">
+                 <h4 className="font-bold text-sm">Add New Guardian</h4>
+                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                    <input className="w-full p-2 border border-slate-200 rounded text-sm" placeholder="Name" value={newGuardian.name} onChange={e => setNewGuardian({...newGuardian, name: e.target.value})} />
+                    <input className="w-full p-2 border border-slate-200 rounded text-sm" placeholder="Email" value={newGuardian.email} onChange={e => setNewGuardian({...newGuardian, email: e.target.value})} />
+                    <input className="w-full p-2 border border-slate-200 rounded text-sm" placeholder="Relationship" value={newGuardian.relationship} onChange={e => setNewGuardian({...newGuardian, relationship: e.target.value})} />
+                 </div>
+                 <div className="flex justify-end gap-2">
+                     <button onClick={() => setIsAdding(false)} className="px-3 py-1 text-sm text-slate-500">Cancel</button>
+                     <button onClick={handleSubmit} className="px-3 py-1 bg-slate-900 text-white text-sm rounded hover:bg-slate-800">Send Invite</button>
+                 </div>
+            </div>
+        )}
+
         <div className="space-y-4">
-            <GuardianCard 
-                name="Dr. Rajesh Kumar" 
-                role="Candidate (Owner)" 
-                email="rajesh@example.com" 
-                status="Verified" 
-                isOwner
-            />
-            <GuardianCard 
-                name="Mrs. Sunita Kumar" 
-                role="Mother (Admin)" 
-                email="sunita.k@example.com" 
-                status="Verified"
-                permissions={['Edit Profile', 'Chat with Families', 'Approve Matches']}
-            />
-            <GuardianCard 
-                name="Mr. Ashok Kumar" 
-                role="Father (Editor)" 
-                email="ashok.ias@example.com" 
-                status="Pending"
-                permissions={['View Matches', 'Approve Matches']}
-            />
+            {guardians.map(g => (
+                <GuardianCard 
+                    key={g.id}
+                    name={g.name} 
+                    role={g.relationship} 
+                    email={g.email || '-'} 
+                    status="Verified"
+                    onDelete={() => onDelete(g.id)}
+                />
+            ))}
+            {guardians.length === 0 && !isAdding && (
+                <div className="text-center py-10 bg-white rounded-xl border border-dashed border-slate-300">
+                    <p className="text-slate-500">No guardians added yet.</p>
+                </div>
+            )}
         </div>
 
         <div className="mt-8 bg-blue-50 border border-blue-100 rounded-xl p-6">
@@ -171,9 +436,10 @@ const GuardiansSection = () => (
             </p>
         </div>
     </div>
-);
+    );
+};
 
-const GuardianCard: React.FC<{name: string, role: string, email: string, status: string, isOwner?: boolean, permissions?: string[]}> = ({ name, role, email, status, isOwner, permissions }) => (
+const GuardianCard: React.FC<{name: string, role: string, email: string, status: string, isOwner?: boolean, permissions?: string[], onDelete?: () => void}> = ({ name, role, email, status, isOwner, permissions, onDelete }) => (
     <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-6">
         <div className="flex items-start gap-4 flex-1">
             <div className="size-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 font-bold text-lg">
@@ -204,15 +470,21 @@ const GuardianCard: React.FC<{name: string, role: string, email: string, status:
                         <span key={p} className="px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs text-slate-600 font-medium">{p}</span>
                     ))
                 )}
+                {!isOwner && !permissions && (
+                    <span className="px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs text-slate-600 font-medium">Default Access</span>
+                )}
             </div>
             {!isOwner && (
-                <button className="mt-3 text-xs font-bold text-primary hover:underline">Edit Access</button>
+                <div className="mt-3 flex gap-2">
+                     <button className="text-xs font-bold text-primary hover:underline">Edit Access</button>
+                     {onDelete && <button onClick={onDelete} className="text-xs font-bold text-red-500 hover:underline">Remove</button>}
+                </div>
             )}
         </div>
     </div>
 );
 
-const ApprovalsSection = () => (
+const ApprovalsSection: React.FC<{approvals: any[]}> = ({ approvals }) => (
     <div className="animate-in fade-in slide-in-from-bottom-4">
          <div className="flex justify-between items-center mb-6">
             <div>
@@ -222,21 +494,25 @@ const ApprovalsSection = () => (
         </div>
 
         <div className="space-y-4">
-            <ApprovalCard 
-                name="Dr. Ananya Singh" 
-                desc="Dermatologist • South Delhi" 
-                status="Pending Dad's Review" 
-                img="https://images.unsplash.com/photo-1559839734-2b71ea197ec2?auto=format&fit=crop&q=80&w=200&h=200"
-                time="2 days ago"
-            />
-            <ApprovalCard 
-                name="Dr. Priya Kapoor" 
-                desc="Pediatrician • Bangalore" 
-                status="Approved by Mom" 
-                img="https://images.unsplash.com/photo-1594824476967-48c8b964273f?auto=format&fit=crop&q=80&w=200&h=200"
-                time="5 hours ago"
-                approved
-            />
+            {approvals.length === 0 && (
+                <div className="text-center py-10 bg-white rounded-xl border border-dashed border-slate-300">
+                    <p className="text-slate-500">No pending approvals.</p>
+                </div>
+            )}
+            {approvals.map(approval => {
+                 const user = approval.target_user || approval.targetUser || { name: 'Unknown', avatar_original: null };
+                 return (
+                    <ApprovalCard 
+                        key={approval.id}
+                        name={user.name || 'Unknown'} 
+                        desc={user.designation || 'Candidate'} 
+                        status={approval.status === 'pending' ? 'Pending Review' : approval.status} 
+                        img={user.avatar_original ? (user.avatar_original.startsWith('http') ? user.avatar_original : `/storage/${user.avatar_original}`) : `https://ui-avatars.com/api/?name=${user.name}`}
+                        time={new Date(approval.created_at).toLocaleDateString()}
+                        approved={approval.status === 'approved'}
+                    />
+                );
+            })}
         </div>
     </div>
 );

@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
+import api, { parseApiError } from '../services/api';
+import { useAuthStore } from '../store/useAuthStore';
 import { 
     Smartphone, Mail, ArrowRight, ShieldCheck, Heart, User, Users, 
     CheckCircle2, Lock, HelpCircle, ChevronLeft, Globe, AlertCircle, Clock, ShieldAlert, Monitor,
@@ -11,9 +13,23 @@ interface WelcomeScreenProps {
 }
 
 const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
+  const { setAuth } = useAuthStore();
   const [step, setStep] = useState<'landing' | 'input' | 'otp' | 'magic-link' | 'password' | 'create-password' | 'mfa' | 'social-consent' | 'recovery-start' | 'recovery-verify' | 'recovery-backup' | 'reset-password' | 'recovery-success'>('landing');
   const [method, setMethod] = useState<'phone' | 'email'>('phone');
-  const [profileFor, setProfileFor] = useState('Myself');
+  
+  // Default fallback data for "On Behalf"
+  const defaultOnBehalf = [
+    { id: 1, name: 'Myself' },
+    { id: 2, name: 'My Son' },
+    { id: 3, name: 'My Daughter' },
+    { id: 4, name: 'My Brother' },
+    { id: 5, name: 'My Sister' },
+    { id: 6, name: 'My Friend' },
+    { id: 7, name: 'My Client' }
+  ];
+
+  const [profileFor, setProfileFor] = useState('1'); 
+  const [onBehalfList, setOnBehalfList] = useState<{id: number, name: string}[]>(defaultOnBehalf);
   const [identifier, setIdentifier] = useState('');
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [password, setPassword] = useState('');
@@ -28,6 +44,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
   
   // Security & Validation
   const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
   const [rateLimitTimer, setRateLimitTimer] = useState(0);
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [isLocked, setIsLocked] = useState(false);
@@ -36,6 +53,23 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
   
   // Refs for OTP inputs
   const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  useEffect(() => {
+    const fetchDropdowns = async () => {
+      try {
+        const response = await api.get('/on-behalf');
+        if (response.data && response.data.data) {
+          setOnBehalfList(response.data.data);
+          if (response.data.data.length > 0) {
+            setProfileFor(response.data.data[0].id.toString());
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch on-behalf list', err);
+      }
+    };
+    fetchDropdowns();
+  }, []);
 
   useEffect(() => {
     let interval: number;
@@ -65,28 +99,99 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
   const strengthScore = calculateStrength(newPassword);
   const isPasswordBreached = isBreached(newPassword);
 
-  const handleIdentifierSubmit = () => {
-      if (method === 'phone') {
-          if (identifier.length < 10) {
-              setError('Please enter a valid 10-digit mobile number');
-              return;
+  const handleIdentifierSubmit = async () => {
+      setIsLoading(true);
+      setError('');
+      try {
+        if (method === 'phone') {
+            if (identifier.length < 10) {
+                setError('Please enter a valid mobile number');
+                setIsLoading(false);
+                return;
+            }
+            
+            // For now, let's keep the country code hardcoded as per Laravel's default fallback logic (+92/India as per UI)
+            const phone = identifier.startsWith('+') ? identifier : `+91${identifier}`;
+            
+            await api.post('/send-phone-verification', { phone });
+            
+            setFailedAttempts(0);
+            setIsLocked(false);
+            setOtp(['', '', '', '', '', '']);
+            setRateLimitTimer(30);
+            setShowOtpHelp(false);
+            setStep('otp');
+        } else {
+            // Email Flow
+            if (!identifier.includes('@')) {
+                setError('Please enter a valid email address');
+                setIsLoading(false);
+                return;
+            }
+            
+            await api.post('/send-email-verification', { email: identifier });
+            
+            setFailedAttempts(0);
+            setIsLocked(false);
+            setOtp(['', '', '', '', '', '']);
+            setRateLimitTimer(30);
+            setShowOtpHelp(false);
+            setStep('otp');
+        }
+      } catch (err) {
+        setError(parseApiError(err));
+      } finally {
+        setIsLoading(false);
+      }
+  };
+
+  const handleOtpVerify = async () => {
+      setIsLoading(true);
+      setError('');
+      const code = otp.join('');
+      if (code.length < 6) {
+          setError('Please enter the complete 6-digit code');
+          setIsLoading(false);
+          return;
+      }
+
+      try {
+          if (method === 'phone') {
+              const phone = identifier.startsWith('+') ? identifier : `+91${identifier}`;
+              const response = await api.post('/verify-phone-code', { phone, code });
+              
+              if (response.data.result) {
+                  if (response.data.user) {
+                      setAuth(response.data.user, response.data.access_token);
+                      onComplete();
+                  } else {
+                      // New user, verified phone, go to profile creation/account setup
+                      setStep('create-password');
+                  }
+              } else {
+                  setError(response.data.message || 'Invalid verification code');
+              }
+          } else {
+              // Email verification
+              const response = await api.post('/verify-email-code', { email: identifier, code });
+              if (response.data.result) {
+                  if (response.data.user) {
+                      setAuth(response.data.user, response.data.access_token);
+                      onComplete();
+                  } else {
+                      // New user
+                      setStep('create-password');
+                  }
+              } else {
+                  setError(response.data.message || 'Invalid verification code');
+              }
           }
-          setError('');
-          setFailedAttempts(0);
-          setIsLocked(false);
-          setOtp(['', '', '', '', '', '']);
-          setRateLimitTimer(30);
-          setShowOtpHelp(false);
-          setStep('otp');
-      } else {
-          // Email Flow
-          if (!identifier.includes('@')) {
-              setError('Please enter a valid email address');
-              return;
-          }
-          setError('');
-          // Default to Magic Link flow as per preference
-          setStep('magic-link');
+      } catch (err) {
+          setError(parseApiError(err));
+          setFailedAttempts(prev => prev + 1);
+          if (failedAttempts >= 4) setIsLocked(true);
+      } finally {
+          setIsLoading(false);
       }
   };
 
@@ -213,6 +318,9 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
 
       if (val && idx < 5) {
           otpRefs.current[idx + 1]?.focus();
+      } else if (val && idx === 5) {
+          // Trigger verification automatically when last digit is filled
+          setTimeout(() => handleOtpVerify(), 100);
       }
   };
 
@@ -313,7 +421,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
                                             onChange={(e) => setProfileFor(e.target.value)}
                                             className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl appearance-none font-medium text-slate-900 focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all cursor-pointer hover:bg-slate-100"
                                         >
-                                            {creatorOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                                            {onBehalfList.map(opt => <option key={opt.id} value={opt.id}>{opt.name}</option>)}
                                         </select>
                                         <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">
                                             <User size={20} />
@@ -647,7 +755,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
                     {(step === 'otp' || step === 'mfa' || step === 'recovery-verify') && (
                         <>
                             <button onClick={() => setStep(step === 'mfa' ? 'password' : (step === 'recovery-verify' ? 'recovery-start' : 'input'))} className="flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-slate-800 mb-4">
-                                <ChevronLeft size={16} /> {step === 'mfa' ? 'Back' : step === 'recovery-verify' ? 'Change Email/Phone' : 'Change Number'}
+                                <ChevronLeft size={16} /> {step === 'mfa' ? 'Back' : step === 'recovery-verify' ? 'Change Email/Phone' : (method === 'phone' ? 'Change Number' : 'Change Email')}
                             </button>
 
                             <div className="text-center mb-8">
@@ -736,10 +844,11 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
                                         )}
 
                                         <button 
-                                            onClick={handleVerify}
+                                            onClick={handleOtpVerify}
+                                            disabled={isLoading}
                                             className={`w-full text-white py-4 rounded-xl font-bold text-lg transition-all shadow-lg ${step === 'mfa' ? 'bg-slate-900 hover:bg-slate-800' : 'bg-primary hover:bg-primary-hover shadow-primary/30'}`}
                                         >
-                                            {step === 'mfa' ? 'Verify & Continue' : (step === 'recovery-verify' ? 'Verify Code' : 'Verify & Continue')}
+                                            {isLoading ? <Loader2 className="animate-spin mx-auto" /> : (step === 'mfa' ? 'Verify & Continue' : (step === 'recovery-verify' ? 'Verify Code' : 'Verify & Continue'))}
                                         </button>
 
                                         <div className="flex flex-col items-center gap-3">

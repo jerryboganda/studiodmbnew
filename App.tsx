@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useAuthStore } from './store/useAuthStore';
+import api from './services/api';
 import Sidebar from './components/Sidebar';
 import RightSidebar from './components/RightSidebar';
 import ProfileCard from './components/ProfileCard';
@@ -22,8 +24,7 @@ import { Bell } from 'lucide-react';
 import { ProfileMatch } from './types';
 
 const App: React.FC = () => {
-  // Auth State: Starts false to show Welcome Screen
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const { isAuthenticated, setAuth, logout } = useAuthStore();
   
   const [currentView, setCurrentView] = useState('dashboard');
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -37,19 +38,33 @@ const App: React.FC = () => {
   const [showSubscription, setShowSubscription] = useState(false);
   const [checkoutItem, setCheckoutItem] = useState<{name: string, amount: number} | null>(null);
 
+  useEffect(() => {
+    // Basic session validation if token exists
+    const token = localStorage.getItem('auth_token');
+    if (token && !isAuthenticated) {
+        api.get('/user-by-token')
+           .then(res => {
+               if (res.data.result) {
+                   setAuth(res.data.user, token);
+               }
+           })
+           .catch(() => logout());
+    }
+  }, [isAuthenticated, setAuth, logout]);
+
   const handleSelectPlan = (name: string, amount: number) => {
       setShowSubscription(false);
       setCheckoutItem({ name, amount });
   };
 
   const handleSignOut = () => {
-      setIsAuthenticated(false);
+      logout();
       setCurrentView('dashboard'); // Reset view on sign out
   }
 
   // Render Welcome Screen if not authenticated
   if (!isAuthenticated) {
-      return <WelcomeScreen onComplete={() => setIsAuthenticated(true)} />;
+      return <WelcomeScreen onComplete={() => {}} />;
   }
 
   return (

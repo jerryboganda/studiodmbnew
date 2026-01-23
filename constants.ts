@@ -1,6 +1,10 @@
 import { ProfileMatch, User, CompatibilityMetric, ActivityItem, Chat } from './types';
 
+// API Base URL - adjust based on your environment
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
+
 export const CURRENT_USER: User = {
+  id: 1, // Current user ID for realtime channels
   name: 'Dr. Rajesh Kumar',
   specialty: 'MD Gen. Medicine',
   avatarUrl: 'https://lh3.googleusercontent.com/aida-public/AB6AXuAzaeWWENYBM2epJ60q01dnFi4yz9YiDXwYV1EcDpGsU1Z-chVQmIqfs1U7m1enVrZEgaqiAL48Wvmleo4yRa9cBGga6j-LEf-P3Ho0KsEw9xfZSyQG3wNMsUkO8ogL8vk2iDwFJm5NtbsXMNvmPodIL3nQnT0M5IGF8jTeSkGjKhPNKnO9QwlZhliJ15ahx-2B289fTui5atTjNPc5CzfxkbA2dzyZDiVpuHek_5h9OrbVpmGA-mfOhwW7KtWkAG1b2ulDY4C42bM'

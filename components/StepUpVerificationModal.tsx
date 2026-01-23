@@ -1,23 +1,95 @@
-import React, { useState } from 'react';
-import { ShieldAlert, Fingerprint, Lock, X } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ShieldAlert, Fingerprint, Lock, X, Loader2, AlertTriangle, KeyRound } from 'lucide-react';
+import api, { parseApiError } from '../services/api';
 
 interface StepUpVerificationModalProps {
   actionLabel: string;
-  onVerified: () => void;
+  onVerified: (token?: string) => void;
   onCancel: () => void;
 }
 
 const StepUpVerificationModal: React.FC<StepUpVerificationModalProps> = ({ actionLabel, onVerified, onCancel }) => {
-  const [method, setMethod] = useState<'biometric' | 'password'>('biometric');
+  const [step, setStep] = useState<'password' | 'otp'>('password');
   const [password, setPassword] = useState('');
+  const [otp, setOtp] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [stepUpToken, setStepUpToken] = useState<string | null>(null);
+  const [otpSent, setOtpSent] = useState(false);
+  const [purpose, setPurpose] = useState<string>('');
 
-  const handleVerify = () => {
+  // Initiate step-up auth on mount
+  useEffect(() => {
+    const initStepUp = async () => {
+      try {
+        // Map action labels to purposes
+        const purposeMap: Record<string, string> = {
+          'transfer ownership': 'ownership_transfer',
+          'delete account': 'delete_account',
+          'disable 2FA': 'disable_2fa',
+        };
+        const p = purposeMap[actionLabel] || 'sensitive_action';
+        setPurpose(p);
+        
+        const response = await api.post('/member/account/step-up/initiate', { purpose: p });
+        setStepUpToken(response.data.data.step_up_token);
+      } catch (err) {
+        console.error('Failed to initiate step-up:', err);
+        setError(parseApiError(err));
+      }
+    };
+    
+    initStepUp();
+  }, [actionLabel]);
+
+  const handlePasswordVerify = async () => {
+    if (!stepUpToken || password.length < 4) return;
+    
     setLoading(true);
-    setTimeout(() => {
-        setLoading(false);
-        onVerified();
-    }, 1500);
+    setError(null);
+    
+    try {
+      const response = await api.post('/member/account/step-up/verify-password', {
+        step_up_token: stepUpToken,
+        password
+      });
+      
+      if (response.data.data.requires_otp) {
+        setStep('otp');
+        setOtpSent(true);
+      } else if (response.data.data.verified) {
+        // Step-up complete without OTP (user doesn't have 2FA)
+        onVerified(stepUpToken);
+      }
+    } catch (err) {
+      console.error('Password verification failed:', err);
+      setError(parseApiError(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOtpVerify = async () => {
+    if (!stepUpToken || otp.length < 6) return;
+    
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const response = await api.post('/member/account/step-up/verify-otp', {
+        step_up_token: stepUpToken,
+        otp
+      });
+      
+      if (response.data.data.verified) {
+        onVerified(stepUpToken);
+      }
+    } catch (err) {
+      console.error('OTP verification failed:', err);
+      setError(parseApiError(err));
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -26,7 +98,7 @@ const StepUpVerificationModal: React.FC<StepUpVerificationModalProps> = ({ actio
         
         {/* Header */}
         <div className="p-6 text-center border-b border-slate-100">
-            <div className="size-14 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
+            <div className="size-14 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center mx-auto mb-4">
                 <Lock size={28} />
             </div>
             <h2 className="text-xl font-bold text-slate-900">Security Verification</h2>
@@ -36,47 +108,91 @@ const StepUpVerificationModal: React.FC<StepUpVerificationModalProps> = ({ actio
         </div>
 
         <div className="p-6">
-            {method === 'biometric' ? (
-                <div className="text-center space-y-6">
-                    <button 
-                        onClick={handleVerify}
-                        className="size-24 bg-slate-100 rounded-full flex items-center justify-center mx-auto text-slate-400 hover:text-primary hover:bg-primary/10 hover:border-2 hover:border-primary transition-all cursor-pointer"
-                    >
-                        <Fingerprint size={48} strokeWidth={1.5} />
-                    </button>
-                    <p className="text-xs font-bold text-slate-500">Touch ID / Face ID</p>
-                    
-                    <button onClick={() => setMethod('password')} className="text-sm text-primary font-bold hover:underline">
-                        Use Password Instead
-                    </button>
-                </div>
-            ) : (
+            {step === 'password' ? (
                 <div className="space-y-4">
                     <div>
                         <label className="block text-xs font-bold text-slate-700 mb-2">Account Password</label>
                         <input 
                             type="password" 
                             autoFocus
-                            className="w-full border border-slate-300 rounded-xl px-4 py-3 text-sm focus:border-primary focus:ring-1 focus:ring-primary/20 outline-none"
-                            placeholder="Enter password..."
+                            className={`w-full border rounded-xl px-4 py-3 text-sm focus:border-primary focus:ring-1 focus:ring-primary/20 outline-none ${error ? 'border-red-300 bg-red-50' : 'border-slate-300'}`}
+                            placeholder="Enter your password..."
                             value={password}
-                            onChange={(e) => setPassword(e.target.value)}
+                            onChange={(e) => { setPassword(e.target.value); setError(null); }}
+                            onKeyDown={(e) => e.key === 'Enter' && handlePasswordVerify()}
                         />
+                        {error && (
+                            <p className="text-xs text-red-600 mt-2 flex items-center gap-1">
+                                <AlertTriangle size={12} /> {error}
+                            </p>
+                        )}
                     </div>
                     
                     <button 
-                        onClick={handleVerify}
-                        disabled={loading || password.length < 4}
+                        onClick={handlePasswordVerify}
+                        disabled={loading || password.length < 4 || !stepUpToken}
                         className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-slate-800 disabled:opacity-50 flex items-center justify-center gap-2"
                     >
-                        {loading ? 'Verifying...' : 'Confirm'}
+                        {loading ? (
+                            <>
+                                <Loader2 size={16} className="animate-spin" />
+                                Verifying...
+                            </>
+                        ) : (
+                            'Continue'
+                        )}
+                    </button>
+                </div>
+            ) : (
+                <div className="space-y-4">
+                    <div className="text-center mb-4">
+                        <div className="size-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-2">
+                            <KeyRound size={24} />
+                        </div>
+                        <p className="text-sm text-slate-600">
+                            Enter the 6-digit code from your authenticator app
+                        </p>
+                    </div>
+                    
+                    <div>
+                        <input 
+                            type="text" 
+                            autoFocus
+                            className={`w-full border rounded-xl px-4 py-3 text-xl font-bold text-center tracking-widest focus:border-primary focus:ring-1 focus:ring-primary/20 outline-none ${error ? 'border-red-300 bg-red-50' : 'border-slate-300'}`}
+                            placeholder="000000"
+                            value={otp}
+                            onChange={(e) => { setOtp(e.target.value.replace(/\D/g, '').slice(0, 6)); setError(null); }}
+                            onKeyDown={(e) => e.key === 'Enter' && handleOtpVerify()}
+                            maxLength={6}
+                        />
+                        {error && (
+                            <p className="text-xs text-red-600 mt-2 flex items-center gap-1">
+                                <AlertTriangle size={12} /> {error}
+                            </p>
+                        )}
+                    </div>
+                    
+                    <button 
+                        onClick={handleOtpVerify}
+                        disabled={loading || otp.length < 6}
+                        className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-slate-800 disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                        {loading ? (
+                            <>
+                                <Loader2 size={16} className="animate-spin" />
+                                Verifying...
+                            </>
+                        ) : (
+                            'Verify & Authorize'
+                        )}
                     </button>
                     
-                    <div className="text-center">
-                         <button onClick={() => setMethod('biometric')} className="text-sm text-slate-500 hover:text-slate-800">
-                             Use Biometrics
-                         </button>
-                    </div>
+                    <button 
+                        onClick={() => { setStep('password'); setError(null); }}
+                        className="w-full text-sm text-slate-500 hover:text-slate-800"
+                    >
+                        Go Back
+                    </button>
                 </div>
             )}
         </div>

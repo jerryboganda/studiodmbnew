@@ -1,82 +1,166 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
     Bell, Mail, MessageCircle, Smartphone, Moon, Sun, Clock, Check, X, 
     AlertTriangle, Shield, Heart, Search, FileText, ChevronRight, Zap, 
-    Calendar, PauseCircle, PlayCircle, Filter
+    Calendar, PauseCircle, PlayCircle, Filter, Loader2
 } from 'lucide-react';
 import { MAIN_PROFILE } from '../constants';
+import api from '../services/api';
+import echo from '../services/echo';
+import { useAuthStore } from '../store/useAuthStore';
 
-const NOTIFICATIONS = [
-  { 
-      id: 1, 
-      type: 'match', 
-      category: 'growth',
-      title: 'New High Compatibility Match', 
-      desc: 'Dr. Aarav (Ortho, AIIMS) matches 98% of your preferences.', 
-      time: '10 mins ago', 
-      read: false,
-      avatar: 'https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?auto=format&fit=crop&q=80&w=100&h=100'
-  },
-  { 
-      id: 2, 
-      type: 'expiry', 
-      category: 'alert',
-      title: 'Interest Expiring Soon', 
-      desc: 'Your proposal to Dr. Rohan expires in 4 hours.', 
-      time: '1 hour ago', 
-      read: false, 
-      action: 'Extend Time' 
-  },
-  { 
-      id: 3, 
-      type: 'search', 
-      category: 'growth',
-      title: 'Saved Search Alert', 
-      desc: '3 new profiles match your "Surgeon in South Delhi" filter.', 
-      time: '4 hours ago', 
-      read: true,
-      action: 'View Profiles'
-  },
-  { 
-      id: 4, 
-      type: 'safety', 
-      category: 'system',
-      title: 'Verification Reminder', 
-      desc: 'Upload your ID to get the Blue Badge and 3x more views.', 
-      time: '1 day ago', 
-      read: true, 
-      action: 'Verify Now' 
-  },
-  { 
-      id: 5, 
-      type: 'view', 
-      category: 'growth',
-      title: 'Profile View', 
-      desc: 'Dr. Priya and 4 others viewed your profile.', 
-      time: 'Yesterday', 
-      read: true 
-  },
-  { 
-      id: 6, 
-      type: 'system', 
-      category: 'system',
-      title: 'Weekly Digest Ready', 
-      desc: 'Your curated list of top profiles for the week is here.', 
-      time: '2 days ago', 
-      read: true,
-      isDigest: true
-  },
-];
+interface Notification {
+    id: string;
+    type: string;
+    title: string;
+    desc: string;
+    time: string;
+    read: boolean;
+    avatar?: string;
+    action?: string;
+    action_url?: string;
+}
+
+interface Preferences {
+    email_digest: boolean;
+    whatsapp: boolean;
+    push_notifications: boolean;
+    sms: boolean;
+    weekly_digest: boolean;
+    profile_snoozed: boolean;
+    snooze_until: string | null;
+}
+
+interface Recap {
+    new_likes: number;
+    new_messages: number;
+    profile_views: number;
+    since: string;
+}
 
 const NotificationsView: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'all' | 'unread' | 'system'>('all');
-  const [snoozed, setSnoozed] = useState(false);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [preferences, setPreferences] = useState<Preferences | null>(null);
+  const [recap, setRecap] = useState<Recap | null>(null);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const { user } = useAuthStore();
 
-  const displayedNotifications = NOTIFICATIONS.filter(n => {
+  useEffect(() => {
+    fetchData();
+
+    if (user?.id) {
+        const channelName = `notifications.${user.id}`;
+        echo.private(channelName)
+            .listen('.received', (e: any) => {
+                console.log('Realtime Notification:', e);
+                if (e.data?.type === 'preferences_updated') {
+                    setPreferences(e.data.preferences);
+                } else if (e.data?.type === 'snooze_updated') {
+                    setPreferences(prev => prev ? {...prev, profile_snoozed: e.data.profile_snoozed, snooze_until: e.data.snooze_until} : null);
+                } else if (e.data?.type === 'read_status_updated') {
+                    setUnreadCount(e.data.unread_count);
+                } else {
+                    // New notification received
+                    fetchNotifications();
+                }
+            });
+            
+        return () => {
+            echo.leave(channelName);
+        };
+    }
+  }, [user?.id]);
+
+  const fetchData = async () => {
+    setLoading(true);
+    await Promise.all([fetchNotifications(), fetchPreferences(), fetchRecap()]);
+    setLoading(false);
+  };
+
+  const fetchNotifications = async () => {
+    try {
+        const response = await api.get('/notifications/feed');
+        if (response.data.result) {
+            setNotifications(response.data.notifications.data);
+            setUnreadCount(response.data.unread_count);
+        }
+    } catch (error) {
+        console.error("Failed to fetch notifications", error);
+    }
+  };
+
+  const fetchPreferences = async () => {
+    try {
+        const response = await api.get('/notifications/preferences');
+        if (response.data.result) {
+            setPreferences(response.data.preferences);
+        }
+    } catch (error) {
+        console.error("Failed to fetch preferences", error);
+    }
+  };
+
+  const fetchRecap = async () => {
+    try {
+        const response = await api.get('/notifications/recap');
+        if (response.data.result) {
+            setRecap(response.data.recap);
+        }
+    } catch (error) {
+        console.error("Failed to fetch recap", error);
+    }
+  };
+
+  const updatePreference = async (key: keyof Preferences, value: boolean) => {
+    // Optimistic update
+    setPreferences(prev => prev ? {...prev, [key]: value} : null);
+    try {
+        await api.post('/notifications/preferences', { [key]: value });
+    } catch (error) {
+        // Revert on error
+        setPreferences(prev => prev ? {...prev, [key]: !value} : null);
+        console.error("Failed to update preference", error);
+    }
+  };
+
+  const toggleSnooze = async () => {
+    try {
+        const response = await api.post('/notifications/snooze', { days: 7 });
+        if (response.data.result) {
+            setPreferences(response.data.preferences);
+        }
+    } catch (error) {
+        console.error("Failed to toggle snooze", error);
+    }
+  };
+
+  const markAllAsRead = async () => {
+    try {
+        await api.post('/notifications/mark-read', {});
+        setNotifications(prev => prev.map(n => ({...n, read: true})));
+        setUnreadCount(0);
+    } catch (error) {
+        console.error("Failed to mark as read", error);
+    }
+  };
+
+  const displayedNotifications = notifications.filter(n => {
       if (activeTab === 'unread') return !n.read;
-      if (activeTab === 'system') return n.category === 'system' || n.category === 'alert';
+      if (activeTab === 'system') return n.type === 'system' || n.type === 'safety' || n.type === 'expiry';
       return true;
   });
+
+  const snoozed = preferences?.profile_snoozed ?? false;
+
+  if (loading && !preferences) {
+      return (
+          <div className="flex h-full items-center justify-center">
+              <Loader2 className="animate-spin text-primary" size={32} />
+          </div>
+      );
+  }
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-slate-50 relative">
@@ -87,7 +171,7 @@ const NotificationsView: React.FC = () => {
           <p className="text-sm text-slate-500">Stay updated on matches, activity, and account status.</p>
         </div>
         <div className="flex gap-2">
-             <button className="px-4 py-2 text-sm font-bold text-slate-500 hover:text-slate-900">Mark all as read</button>
+             <button onClick={markAllAsRead} className="px-4 py-2 text-sm font-bold text-slate-500 hover:text-slate-900">Mark all as read</button>
         </div>
       </header>
 
@@ -98,6 +182,7 @@ const NotificationsView: React.FC = () => {
               <div className="max-w-2xl mx-auto space-y-6">
                   
                   {/* "While you were away" Recap Card */}
+                  {recap && (recap.new_likes > 0 || recap.new_messages > 0 || recap.profile_views > 0) && (
                   <div className="bg-gradient-to-r from-indigo-500 to-purple-600 rounded-2xl p-6 text-white shadow-lg mb-6 relative overflow-hidden">
                       <div className="relative z-10">
                           <div className="flex items-center gap-2 mb-2 opacity-90">
@@ -107,15 +192,15 @@ const NotificationsView: React.FC = () => {
                           <h3 className="text-2xl font-bold mb-4">You missed a few things...</h3>
                           <div className="flex gap-6">
                               <div>
-                                  <p className="text-3xl font-black">3</p>
+                                  <p className="text-3xl font-black">{recap.new_likes}</p>
                                   <p className="text-xs opacity-80">New Likes</p>
                               </div>
                               <div>
-                                  <p className="text-3xl font-black">1</p>
-                                  <p className="text-xs opacity-80">Message</p>
+                                  <p className="text-3xl font-black">{recap.new_messages}</p>
+                                  <p className="text-xs opacity-80">Message{recap.new_messages !== 1 ? 's' : ''}</p>
                               </div>
                               <div>
-                                  <p className="text-3xl font-black">5</p>
+                                  <p className="text-3xl font-black">{recap.profile_views}</p>
                                   <p className="text-xs opacity-80">Profile Views</p>
                               </div>
                           </div>
@@ -124,16 +209,23 @@ const NotificationsView: React.FC = () => {
                           <Bell size={140} />
                       </div>
                   </div>
+                  )}
 
                   {/* Filter Tabs */}
                   <div className="flex items-center gap-2 overflow-x-auto pb-2">
-                      <TabButton label="All Activity" active={activeTab === 'all'} onClick={() => setActiveTab('all')} count={6} />
-                      <TabButton label="Unread" active={activeTab === 'unread'} onClick={() => setActiveTab('unread')} count={2} />
+                      <TabButton label="All Activity" active={activeTab === 'all'} onClick={() => setActiveTab('all')} count={notifications.length} />
+                      <TabButton label="Unread" active={activeTab === 'unread'} onClick={() => setActiveTab('unread')} count={unreadCount} />
                       <TabButton label="System & Safety" active={activeTab === 'system'} onClick={() => setActiveTab('system')} />
                   </div>
 
                   {/* Notification List */}
                   <div className="space-y-4">
+                      {displayedNotifications.length === 0 && (
+                          <div className="text-center py-10 bg-white rounded-xl border border-dashed border-slate-300">
+                              <Bell className="mx-auto text-slate-300 mb-2" size={32} />
+                              <p className="text-slate-500">No notifications yet</p>
+                          </div>
+                      )}
                       {displayedNotifications.map((note) => (
                           <div 
                             key={note.id} 
@@ -196,10 +288,34 @@ const NotificationsView: React.FC = () => {
               <div className="mb-8">
                   <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-4">Notification Channels</h3>
                   <div className="space-y-4">
-                      <ChannelToggle icon={<Mail size={16} />} label="Email Digest" desc="Daily summary" defaultChecked />
-                      <ChannelToggle icon={<MessageCircle size={16} />} label="WhatsApp" desc="Instant match alerts" defaultChecked />
-                      <ChannelToggle icon={<Smartphone size={16} />} label="Push Notifications" desc="Real-time activity" defaultChecked />
-                      <ChannelToggle icon={<FileText size={16} />} label="SMS" desc="Only for security" defaultChecked={false} />
+                      <ChannelToggle 
+                          icon={<Mail size={16} />} 
+                          label="Email Digest" 
+                          desc="Daily summary" 
+                          checked={preferences?.email_digest ?? true}
+                          onChange={(v) => updatePreference('email_digest', v)}
+                      />
+                      <ChannelToggle 
+                          icon={<MessageCircle size={16} />} 
+                          label="WhatsApp" 
+                          desc="Instant match alerts" 
+                          checked={preferences?.whatsapp ?? true}
+                          onChange={(v) => updatePreference('whatsapp', v)}
+                      />
+                      <ChannelToggle 
+                          icon={<Smartphone size={16} />} 
+                          label="Push Notifications" 
+                          desc="Real-time activity" 
+                          checked={preferences?.push_notifications ?? true}
+                          onChange={(v) => updatePreference('push_notifications', v)}
+                      />
+                      <ChannelToggle 
+                          icon={<FileText size={16} />} 
+                          label="SMS" 
+                          desc="Only for security" 
+                          checked={preferences?.sms ?? false}
+                          onChange={(v) => updatePreference('sms', v)}
+                      />
                   </div>
               </div>
 
@@ -216,7 +332,12 @@ const NotificationsView: React.FC = () => {
                               <p className="text-xs text-slate-500">Every Sunday</p>
                           </div>
                           <div className="ml-auto">
-                              <input type="checkbox" className="accent-purple-600 size-4" defaultChecked />
+                              <input 
+                                  type="checkbox" 
+                                  className="accent-purple-600 size-4" 
+                                  checked={preferences?.weekly_digest ?? true}
+                                  onChange={(e) => updatePreference('weekly_digest', e.target.checked)}
+                              />
                           </div>
                       </div>
                       <p className="text-xs text-slate-500 mt-2 border-t border-slate-200 pt-2">
@@ -235,7 +356,7 @@ const NotificationsView: React.FC = () => {
                               {snoozed ? 'Profile Snoozed' : 'Profile Active'}
                           </span>
                           <button 
-                            onClick={() => setSnoozed(!snoozed)}
+                            onClick={toggleSnooze}
                             className={`text-xs font-bold px-2 py-1 rounded transition-colors ${snoozed ? 'bg-white text-yellow-700 shadow-sm' : 'bg-slate-100 text-slate-600'}`}
                           >
                               {snoozed ? 'Wake Up' : 'Snooze'}
@@ -247,10 +368,10 @@ const NotificationsView: React.FC = () => {
                             : 'You are visible to all matches. Taking a break? Snooze to pause requests.'}
                       </p>
                       
-                      {snoozed && (
+                      {snoozed && preferences?.snooze_until && (
                           <div className="flex items-center gap-2 text-xs font-bold text-yellow-700 bg-yellow-100/50 p-2 rounded-lg">
                               <Clock size={12} />
-                              Auto-wake in 7 days
+                              Auto-wake {new Date(preferences.snooze_until).toLocaleDateString()}
                           </div>
                       )}
                   </div>
@@ -292,14 +413,19 @@ const TabButton: React.FC<{label: string, active: boolean, onClick: () => void, 
     </button>
 );
 
-const ChannelToggle: React.FC<{icon: React.ReactNode, label: string, desc: string, defaultChecked: boolean}> = ({ icon, label, desc, defaultChecked }) => (
+const ChannelToggle: React.FC<{icon: React.ReactNode, label: string, desc: string, checked: boolean, onChange: (value: boolean) => void}> = ({ icon, label, desc, checked, onChange }) => (
     <div className="flex items-start gap-3">
         <div className="text-slate-400 mt-1">{icon}</div>
         <div className="flex-1">
             <div className="flex justify-between items-center">
                 <span className="text-sm font-bold text-slate-900">{label}</span>
                 <label className="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" className="sr-only peer" defaultChecked={defaultChecked} />
+                    <input 
+                        type="checkbox" 
+                        className="sr-only peer" 
+                        checked={checked}
+                        onChange={(e) => onChange(e.target.checked)}
+                    />
                     <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
                 </label>
             </div>

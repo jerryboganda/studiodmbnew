@@ -1,37 +1,62 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
     Calendar, CheckCircle2, Clock, MapPin, DollarSign, Store, ChevronRight, 
     Video, Phone, Users, HeartHandshake, PartyPopper, ArrowLeft, CalendarDays,
     Plus, Mail, Check, ExternalLink, Calculator, ShoppingBag
 } from 'lucide-react';
 import { MAIN_PROFILE, SECONDARY_PROFILE } from '../constants';
+import api from '../services/api';
+import echo from '../services/echo';
+import { useAuthStore } from '../store/useAuthStore';
 
-// Mock Data for Pipeline
-const ACTIVE_TRACKS = [
-    {
-        id: '1',
-        profile: MAIN_PROFILE,
-        stage: 'courtship', // chatting, meeting, courtship, engaged
-        stageLabel: 'Exclusive Courtship',
-        lastInteraction: '2 days ago',
-        nextAction: 'Plan family dinner',
-        progress: 75
-    },
-    {
-        id: '2',
-        profile: { ...SECONDARY_PROFILE, name: 'Dr. Rohan Gupta' },
-        stage: 'meeting',
-        stageLabel: 'First Meetings',
-        lastInteraction: 'Yesterday',
-        nextAction: 'Post-date feedback',
-        progress: 40
-    }
-];
+interface Track {
+    id: number;
+    partner_id: number;
+    profile: any;
+    stage: string;
+    stageLabel: string;
+    lastInteraction: string;
+    nextAction: string;
+    progress: number;
+}
 
 const ProgressionView: React.FC = () => {
-  const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
+  const [selectedTrackId, setSelectedTrackId] = useState<number | null>(null);
+  const [tracks, setTracks] = useState<Track[]>([]);
+  const [loading, setLoading] = useState(true);
+  const { user } = useAuthStore();
 
-  const selectedTrack = ACTIVE_TRACKS.find(t => t.id === selectedTrackId);
+  useEffect(() => {
+    fetchTracks();
+
+    if (user?.id) {
+        const channelName = `progression.${user.id}`;
+        echo.private(channelName)
+            .listen('.progression.updated', (e: any) => {
+                console.log('Realtime Update:', e);
+                fetchTracks();
+            });
+            
+        return () => {
+            echo.leave(channelName);
+        };
+    }
+  }, [user?.id]);
+
+  const fetchTracks = async () => {
+    try {
+        const response = await api.get('/progression/active');
+        if (response.data.result) {
+            setTracks(response.data.data);
+        }
+    } catch (error) {
+        console.error("Failed to fetch progression tracks", error);
+    } finally {
+        setLoading(false);
+    }
+  };
+
+  const selectedTrack = tracks.find(t => t.id === selectedTrackId);
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-slate-50 relative">
@@ -69,7 +94,7 @@ const ProgressionView: React.FC = () => {
             {selectedTrackId && selectedTrack ? (
                 <RelationshipDetail track={selectedTrack} />
             ) : (
-                <PipelineDashboard onSelect={(id) => setSelectedTrackId(id)} />
+                <PipelineDashboard onSelect={(id) => setSelectedTrackId(id)} tracks={tracks} />
             )}
         </div>
       </div>
@@ -79,7 +104,7 @@ const ProgressionView: React.FC = () => {
 
 /* --- Sub-Views --- */
 
-const PipelineDashboard: React.FC<{onSelect: (id: string) => void}> = ({ onSelect }) => {
+const PipelineDashboard: React.FC<{onSelect: (id: number) => void; tracks: Track[]}> = ({ onSelect, tracks }) => {
     return (
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4">
             {/* Quick Stats */}
@@ -117,7 +142,7 @@ const PipelineDashboard: React.FC<{onSelect: (id: string) => void}> = ({ onSelec
             <div>
                 <h3 className="text-lg font-bold text-slate-900 mb-6">Active Tracks</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {ACTIVE_TRACKS.map(track => (
+                    {tracks.map(track => (
                         <div 
                             key={track.id}
                             onClick={() => onSelect(track.id)}
@@ -170,7 +195,7 @@ const PipelineDashboard: React.FC<{onSelect: (id: string) => void}> = ({ onSelec
     );
 };
 
-const RelationshipDetail: React.FC<{track: typeof ACTIVE_TRACKS[0]}> = ({ track }) => {
+const RelationshipDetail: React.FC<{track: Track}> = ({ track }) => {
     const [activeTab, setActiveTab] = useState<'overview' | 'schedule' | 'planning'>('overview');
 
     return (

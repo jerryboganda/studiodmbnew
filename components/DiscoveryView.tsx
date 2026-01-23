@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Search, Sliders, MapPin, Heart, X, ChevronDown, Eye, EyeOff, Map as MapIcon, 
   Grid, Zap, Star, Plane, Filter, ArrowUpDown, Bookmark, Crown, UserCheck, Send, FileText, Lock
@@ -6,101 +6,7 @@ import {
 import MatchIntelligenceModal from './MatchIntelligenceModal';
 import MatchTunerModal from './MatchTunerModal';
 import { ProfileMatch } from '../types';
-
-// Mock Profiles (Extended with flags)
-const MOCK_PROFILES: ProfileMatch[] = [
-  {
-    id: '1',
-    name: "Dr. Ananya Singh",
-    age: 28,
-    specialty: "Dermatologist",
-    location: "South Delhi",
-    hospital: "Max Healthcare",
-    avatarUrl: "https://images.unsplash.com/photo-1559839734-2b71ea197ec2?auto=format&fit=crop&q=80&w=300&h=300",
-    matchPercentage: 95,
-    matchReasons: ["Vegetarian", "Delhi based", "MD Gold Medalist"],
-    isOnline: true,
-    isVerified: true,
-    isAgentPick: true,
-    intelligence: {
-        totalScore: 95,
-        categories: [{name: 'Values', score: 98, weight: 'High'}, {name: 'Lifestyle', score: 92, weight: 'Medium'}],
-        mutualFit: { youMeetThem: 100, theyMeetYou: 90 },
-        topReasons: ['Vegetarian', 'Delhi Based'],
-        frictionPoints: ['None detected'],
-        agentNotes: 'Top recommendation for this week.',
-        generatedAt: 'Today'
-    }
-  },
-  {
-    id: '2',
-    name: "Dr. Arjun Mehta",
-    age: 31,
-    specialty: "Neurosurgeon",
-    location: "Mumbai",
-    hospital: "Lilavati Hospital",
-    avatarUrl: "https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?auto=format&fit=crop&q=80&w=300&h=300",
-    matchPercentage: 88,
-    matchReasons: ["High Income Match", "Music Lover"],
-    isOnline: false,
-    isVerified: true,
-    isHighIntent: true
-  },
-  {
-    id: '3',
-    name: "Dr. Priya Kapoor",
-    age: 27,
-    specialty: "Pediatrician",
-    location: "Bangalore",
-    hospital: "Manipal Hospital",
-    avatarUrl: "https://images.unsplash.com/photo-1594824476967-48c8b964273f?auto=format&fit=crop&q=80&w=300&h=300",
-    matchPercentage: 92,
-    matchReasons: ["Shared Hobbies", "Age Preference"],
-    isOnline: true,
-    isVerified: true,
-    isAgentPick: true
-  },
-  {
-    id: '4',
-    name: "Dr. Kabir Malhotra",
-    age: 30,
-    specialty: "Orthopedic",
-    location: "Chandigarh",
-    hospital: "PGIMER",
-    avatarUrl: "https://images.unsplash.com/photo-1537368910025-700350fe46c7?auto=format&fit=crop&q=80&w=300&h=300",
-    matchPercentage: 82,
-    matchReasons: ["Community Match"],
-    isOnline: false,
-    isVerified: false
-  },
-  {
-    id: '5',
-    name: "Dr. Sara Khan",
-    age: 29,
-    specialty: "Radiologist",
-    location: "Hyderabad",
-    hospital: "Apollo",
-    avatarUrl: "https://images.unsplash.com/photo-1622253692010-333f2da6031d?auto=format&fit=crop&q=80&w=300&h=300",
-    matchPercentage: 78,
-    matchReasons: ["Language Match"],
-    isOnline: true,
-    isVerified: true,
-    isHighIntent: true
-  },
-  {
-    id: '6',
-    name: "Dr. Vihaan Reddy",
-    age: 32,
-    specialty: "Cardiologist",
-    location: "Chennai",
-    hospital: "Fortis",
-    avatarUrl: "https://images.unsplash.com/photo-1612531386530-97286d74c2ea?auto=format&fit=crop&q=80&w=300&h=300",
-    matchPercentage: 75,
-    matchReasons: ["Education Match"],
-    isOnline: false,
-    isVerified: true
-  }
-];
+import { getDiscoveryData, searchMembers } from '../services/discoveryService';
 
 interface DiscoveryViewProps {
     onSendProposal: (profile: ProfileMatch) => void;
@@ -114,12 +20,93 @@ const DiscoveryView: React.FC<DiscoveryViewProps> = ({ onSendProposal }) => {
   const [selectedProfile, setSelectedProfile] = useState<ProfileMatch | null>(null);
   const [showTuner, setShowTuner] = useState(false);
   const [activeTab, setActiveTab] = useState<'all' | 'agent' | 'intent'>('all');
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  
+  // Filter States
+  const [ageRange, setAgeRange] = useState({ min: 18, max: 60 });
+  const [selectedReligion, setSelectedReligion] = useState('');
+  const [selectedProfession, setSelectedProfession] = useState('');
 
-  const displayedProfiles = MOCK_PROFILES.filter(p => {
-    if (activeTab === 'agent') return p.isAgentPick;
-    if (activeTab === 'intent') return p.isHighIntent;
-    return true;
+  const [sections, setSections] = useState<{
+    agent_picks: ProfileMatch[];
+    high_intent: ProfileMatch[];
+    recently_active: ProfileMatch[];
+  }>({
+    agent_picks: [],
+    high_intent: [],
+    recently_active: []
   });
+
+  const mapBackendToProfile = (backend: any): ProfileMatch => {
+    const defaultAvatar = backend.gender === 1 
+        ? '/assets/img/avatar-place.png' 
+        : '/assets/img/female-avatar-place.png';
+        
+    return {
+        id: backend.user_id.toString(),
+        name: `${backend.first_name} ${backend.last_name}`,
+        specialty: backend.marital_status || 'Single',
+        hospital: backend.religion || '',
+        location: backend.country || '',
+        age: backend.age,
+        matchPercentage: 90, // Placeholder
+        avatarUrl: backend.photo || defaultAvatar,
+        isVerified: true,
+        isAgentPick: backend.is_agent_pick,
+        isHighIntent: backend.is_high_intent,
+        matchReasons: [backend.religion, backend.mothere_tongue].filter(Boolean)
+    };
+  };
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const data = await getDiscoveryData();
+        setSections({
+          agent_picks: data.agent_picks.map(mapBackendToProfile),
+          high_intent: data.high_intent.map(mapBackendToProfile),
+          recently_active: data.recently_active.map(mapBackendToProfile),
+        });
+      } catch (error) {
+        console.error('Failed to fetch discovery data', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, []);
+
+  const displayedProfiles = (() => {
+    if (activeTab === 'agent') return sections.agent_picks;
+    if (activeTab === 'intent') return sections.high_intent;
+    return sections.recently_active; // Or a combined list
+  })();
+
+  const handleSearch = async (e?: React.KeyboardEvent<HTMLInputElement>) => {
+      if (!e || e.key === 'Enter') {
+          try {
+              setLoading(true);
+              const data = await searchMembers({
+                  q: searchQuery,
+                  age_min: ageRange.min,
+                  age_max: ageRange.max,
+                  religion: selectedReligion,
+                  profession: selectedProfession
+              });
+              const mapped = data.data.map(mapBackendToProfile);
+              setSections(prev => ({ ...prev, recently_active: mapped }));
+              setActiveTab('all');
+              setShowFilters(false);
+          } catch (error) {
+              console.error('Search failed', error);
+          } finally {
+              setLoading(false);
+          }
+      }
+  };
 
   return (
     <div className="flex-1 flex flex-col h-full bg-slate-50 relative overflow-hidden">
@@ -133,6 +120,9 @@ const DiscoveryView: React.FC<DiscoveryViewProps> = ({ onSendProposal }) => {
                 type="text" 
                 placeholder="Search by specialty, name, ID or keyword..." 
                 className="w-full pl-10 pr-4 py-2.5 bg-slate-100 border-none rounded-full text-sm focus:ring-2 focus:ring-primary/20 focus:bg-white transition-all"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={handleSearch}
             />
          </div>
 
@@ -235,14 +225,23 @@ const DiscoveryView: React.FC<DiscoveryViewProps> = ({ onSendProposal }) => {
                     </FilterGroup>
 
                     <FilterGroup label="Age Range">
-                        <div className="h-2 bg-slate-200 rounded-full relative mt-3">
-                            <div className="absolute left-1/4 right-1/4 h-full bg-primary rounded-full"></div>
-                            <div className="absolute left-1/4 top-1/2 -translate-y-1/2 size-4 bg-white border-2 border-primary rounded-full shadow cursor-grab"></div>
-                            <div className="absolute right-1/4 top-1/2 -translate-y-1/2 size-4 bg-white border-2 border-primary rounded-full shadow cursor-grab"></div>
+                        <div className="flex justify-between mb-2 text-xs font-bold text-slate-600">
+                            <input 
+                                type="number" 
+                                value={ageRange.min} 
+                                onChange={(e) => setAgeRange(prev => ({ ...prev, min: parseInt(e.target.value) }))}
+                                className="w-12 border-none bg-slate-100 rounded px-1"
+                            />
+                            <span>to</span>
+                            <input 
+                                type="number" 
+                                value={ageRange.max} 
+                                onChange={(e) => setAgeRange(prev => ({ ...prev, max: parseInt(e.target.value) }))}
+                                className="w-12 border-none bg-slate-100 rounded px-1"
+                            />
                         </div>
-                        <div className="flex justify-between mt-2 text-xs font-bold text-slate-600">
-                            <span>24</span>
-                            <span>35</span>
+                        <div className="h-2 bg-slate-200 rounded-full relative mt-3">
+                            <div className="absolute left-0 right-0 h-full bg-primary rounded-full opacity-20"></div>
                         </div>
                     </FilterGroup>
 
@@ -258,23 +257,53 @@ const DiscoveryView: React.FC<DiscoveryViewProps> = ({ onSendProposal }) => {
                     </FilterGroup>
 
                     <FilterGroup label="Community & Religion">
-                         <input type="text" placeholder="Select communities..." className="w-full text-sm p-2 border border-slate-200 rounded-md focus:outline-none focus:border-primary" />
+                         <input 
+                            type="text" 
+                            placeholder="Select communities..." 
+                            className="w-full text-sm p-2 border border-slate-200 rounded-md focus:outline-none focus:border-primary" 
+                            value={selectedReligion}
+                            onChange={(e) => setSelectedReligion(e.target.value)}
+                         />
                     </FilterGroup>
 
                     <FilterGroup label="Profession">
-                         <div className="flex flex-wrap gap-2">
+                         <div className="flex flex-wrap gap-2 mb-2">
                             {['Doctor', 'Surgeon', 'Dentist', 'Medical Student'].map(p => (
-                                <span key={p} className="px-2 py-1 bg-slate-100 text-xs rounded border border-slate-200">{p}</span>
+                                <button 
+                                    key={p} 
+                                    onClick={() => setSelectedProfession(p)}
+                                    className={`px-2 py-1 text-xs rounded border transition-colors ${selectedProfession === p ? 'bg-primary text-white border-primary' : 'bg-slate-100 text-slate-600 border-slate-200'}`}
+                                >
+                                    {p}
+                                </button>
                             ))}
                          </div>
+                         <input 
+                            type="text" 
+                            placeholder="Other profession..." 
+                            className="w-full text-sm p-2 border border-slate-200 rounded-md focus:outline-none focus:border-primary" 
+                            value={selectedProfession}
+                            onChange={(e) => setSelectedProfession(e.target.value)}
+                         />
                     </FilterGroup>
                 </div>
 
                 <div className="mt-auto pt-6 border-t border-slate-100">
-                    <button className="w-full bg-primary text-white py-2.5 rounded-lg font-bold text-sm hover:bg-primary-hover shadow-lg shadow-primary/20">
+                    <button 
+                        onClick={() => handleSearch()}
+                        className="w-full bg-primary text-white py-2.5 rounded-lg font-bold text-sm hover:bg-primary-hover shadow-lg shadow-primary/20"
+                    >
                         Apply Filters
                     </button>
-                    <button className="w-full text-slate-500 py-2.5 text-xs font-bold mt-2 hover:text-slate-700">
+                    <button 
+                        onClick={() => {
+                            setAgeRange({ min: 18, max: 60 });
+                            setSelectedReligion('');
+                            setSelectedProfession('');
+                            handleSearch();
+                        }}
+                        className="w-full text-slate-500 py-2.5 text-xs font-bold mt-2 hover:text-slate-700"
+                    >
                         Reset All
                     </button>
                 </div>
@@ -285,14 +314,14 @@ const DiscoveryView: React.FC<DiscoveryViewProps> = ({ onSendProposal }) => {
         <div className={`flex-1 overflow-y-auto p-6 transition-all duration-300 ${showFilters ? 'ml-72' : ''} scrollbar-hide`}>
             
             {/* Top Picks / Header */}
-            {activeTab === 'all' && (
+            {activeTab === 'all' && sections.agent_picks.length > 0 && (
                 <div className="mb-8">
                     <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
                         <Star size={18} className="text-yellow-500 fill-yellow-500" /> 
                         Top Picks for You
                     </h3>
                     <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-hide">
-                        {MOCK_PROFILES.slice(0, 3).map(profile => (
+                        {sections.agent_picks.slice(0, 5).map(profile => (
                             <div 
                                 key={profile.id} 
                                 onClick={() => setSelectedProfile(profile)}
@@ -315,16 +344,27 @@ const DiscoveryView: React.FC<DiscoveryViewProps> = ({ onSendProposal }) => {
                  <h3 className="text-lg font-bold text-slate-900 mb-4">
                     {activeTab === 'agent' ? "Matchmaker Recommendations" : activeTab === 'intent' ? "High Intent Profiles" : "Explore Profiles"}
                  </h3>
-                 {viewMode === 'grid' ? (
+                 {loading ? (
+                     <div className="flex flex-col items-center justify-center py-20 opacity-50">
+                        <div className="size-12 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+                        <p className="mt-4 font-medium text-slate-600">Loading discovery feed...</p>
+                     </div>
+                 ) : viewMode === 'grid' ? (
                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                        {displayedProfiles.map(profile => (
-                            <ProfileGridCard 
-                                key={profile.id} 
-                                profile={profile} 
-                                onClick={() => setSelectedProfile(profile)}
-                                onProposal={() => onSendProposal(profile)}
-                            />
-                        ))}
+                        {displayedProfiles.length > 0 ? (
+                            displayedProfiles.map(profile => (
+                                <ProfileGridCard 
+                                    key={profile.id} 
+                                    profile={profile} 
+                                    onClick={() => setSelectedProfile(profile)}
+                                    onProposal={() => onSendProposal(profile)}
+                                />
+                            ))
+                        ) : (
+                            <div className="col-span-full py-20 text-center">
+                                <p className="text-slate-400 font-medium">No results found for this category.</p>
+                            </div>
+                        )}
                      </div>
                  ) : (
                      <div className="h-96 bg-slate-200 rounded-xl flex items-center justify-center text-slate-500 border border-slate-300">

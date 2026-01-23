@@ -1,13 +1,82 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
     Shield, Smartphone, Mail, Globe, Users, Lock, Eye, EyeOff, PauseCircle, Download, FileText, 
     Check, ChevronRight, UserCog, ShieldCheck, Siren, Ban, UserX, ScanFace, Building2,
     Ghost, Fingerprint, Trash2, Key, History, Umbrella, CreditCard, Receipt, Gift,
-    UserPlus, SmartphoneNfc, LogOut, Laptop, Tablet, Bell
+    UserPlus, SmartphoneNfc, LogOut, Laptop, Tablet, Bell, Loader2, AlertCircle, Copy, RefreshCw, X
 } from 'lucide-react';
 import VerificationModal from './VerificationModal';
 import StepUpVerificationModal from './StepUpVerificationModal';
 import TwoFactorSetupModal from './TwoFactorSetupModal';
+import api, { parseApiError } from '../services/api';
+import echo from '../services/echo';
+import { CURRENT_USER } from '../constants';
+
+// Types for API responses
+interface DeviceData {
+    id: number;
+    device_name: string;
+    device_type: 'desktop' | 'mobile' | 'tablet';
+    browser: string;
+    browser_version: string;
+    os: string;
+    os_version: string;
+    ip_masked: string;
+    location_display: string;
+    last_used_display: string;
+    is_current: boolean;
+}
+
+interface TrustedContactData {
+    id: number;
+    name: string;
+    relationship: string;
+    phone_masked: string;
+    email_masked: string;
+    is_verified: boolean;
+    can_recover_account: boolean;
+}
+
+interface SecurityStatusData {
+    credentials: {
+        email: string;
+        email_verified: boolean;
+        phone: string;
+        phone_verified: boolean;
+    };
+    two_factor: {
+        enabled: boolean;
+        method: 'app' | 'sms' | 'email' | null;
+        confirmed_at: string | null;
+        has_recovery_codes: boolean;
+    };
+    devices: DeviceData[];
+    trusted_contacts: TrustedContactData[];
+}
+
+interface ProfileManagerData {
+    id: number;
+    manager_user_id: number;
+    manager_name: string;
+    manager_type: 'family' | 'matchmaker';
+    permissions: string[];
+    status: 'pending' | 'active';
+}
+
+interface OwnershipStatusData {
+    member_id: number;
+    management_mode: 'self' | 'family' | 'matchmaker' | 'dual';
+    is_owner: boolean;
+    owner_user_id: number;
+    managers: ProfileManagerData[];
+    pending_transfers: any[];
+}
+
+interface TwoFactorSetupData {
+    secret: string;
+    qr_code_svg: string;
+    recovery_codes: string[];
+}
 
 interface SettingsViewProps {
   onLaunchOnboarding: () => void;
@@ -16,44 +85,343 @@ interface SettingsViewProps {
 
 const SettingsView: React.FC<SettingsViewProps> = ({ onLaunchOnboarding, onOpenBilling }) => {
   const [activeTab, setActiveTab] = useState<'account' | 'privacy' | 'safety' | 'billing'>('account');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  
+  // Security Status from API
+  const [securityStatus, setSecurityStatus] = useState<SecurityStatusData | null>(null);
+  const [ownershipStatus, setOwnershipStatus] = useState<OwnershipStatusData | null>(null);
+  
+  // Derived / UI states
   const [managementMode, setManagementMode] = useState<'self' | 'family' | 'matchmaker' | 'dual'>('self');
   const [snoozeEnabled, setSnoozeEnabled] = useState(false);
   const [showVerification, setShowVerification] = useState(false);
   const [stepUpAction, setStepUpAction] = useState<string | null>(null);
+  const [stepUpToken, setStepUpToken] = useState<string | null>(null);
   
   // 2FA State
   const [is2FAEnabled, setIs2FAEnabled] = useState(false);
   const [show2FAModal, setShow2FAModal] = useState(false);
+  const [twoFactorSetup, setTwoFactorSetup] = useState<TwoFactorSetupData | null>(null);
+  const [showRecoveryCodes, setShowRecoveryCodes] = useState(false);
+  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
 
   // Device Management State
-  const [devices, setDevices] = useState([
-      { id: 1, name: 'Chrome on MacBook Pro', location: 'New Delhi, India', lastActive: 'Active Now', type: 'desktop', current: true },
-      { id: 2, name: 'iPhone 14 Pro', location: 'New Delhi, India', lastActive: '2 hours ago', type: 'mobile', current: false },
-      { id: 3, name: 'iPad Air', location: 'Mumbai, India', lastActive: '3 days ago', type: 'tablet', current: false },
-  ]);
+  const [devices, setDevices] = useState<DeviceData[]>([]);
   const [loginAlerts, setLoginAlerts] = useState({ email: true, sms: false });
+  const [revokingDevice, setRevokingDevice] = useState<number | null>(null);
+  const [revokingAll, setRevokingAll] = useState(false);
 
   // Privacy State
   const [incognito, setIncognito] = useState(false);
   const [watermark, setWatermark] = useState(true);
 
   // Recovery State
-  const [trustedContact, setTrustedContact] = useState<{name: string, relation: string} | null>(null);
+  const [trustedContacts, setTrustedContacts] = useState<TrustedContactData[]>([]);
+  const [showAddContactModal, setShowAddContactModal] = useState(false);
+  const [addingContact, setAddingContact] = useState(false);
 
-  const handleStepUpSuccess = () => {
-      setStepUpAction(null);
-      // In a real app, perform the sensitive action here
-      alert("Verification Successful! Action authorized.");
+  // Ownership State
+  const [managers, setManagers] = useState<ProfileManagerData[]>([]);
+  const [savingMode, setSavingMode] = useState(false);
+  const [showTransferModal, setShowTransferModal] = useState(false);
+
+  // Fetch security status from API
+  const fetchSecurityStatus = useCallback(async () => {
+    try {
+      const response = await api.get('/member/account/security-status');
+      const data: SecurityStatusData = response.data.data;
+      setSecurityStatus(data);
+      setDevices(data.devices);
+      setIs2FAEnabled(data.two_factor.enabled);
+      setTrustedContacts(data.trusted_contacts);
+    } catch (err) {
+      console.error('Failed to fetch security status:', err);
+      setError(parseApiError(err));
+    }
+  }, []);
+
+  // Fetch ownership status from API
+  const fetchOwnershipStatus = useCallback(async () => {
+    try {
+      const response = await api.get('/member/account/ownership');
+      const data: OwnershipStatusData = response.data.data;
+      setOwnershipStatus(data);
+      setManagementMode(data.management_mode);
+      setManagers(data.managers);
+    } catch (err) {
+      console.error('Failed to fetch ownership status:', err);
+    }
+  }, []);
+
+  // Initial data load
+  useEffect(() => {
+    const loadData = async () => {
+      setLoading(true);
+      await Promise.all([fetchSecurityStatus(), fetchOwnershipStatus()]);
+      setLoading(false);
+    };
+    loadData();
+  }, [fetchSecurityStatus, fetchOwnershipStatus]);
+
+  // Setup Echo for realtime updates
+  useEffect(() => {
+    const channelName = `account.${CURRENT_USER.id}`;
+    
+    const channel = echo.private(channelName)
+      .listen('.account.updated', (e: { event: string; data: any }) => {
+        console.log('Account updated event:', e);
+        
+        switch (e.event) {
+          case 'device_revoked':
+            setDevices(prev => prev.filter(d => d.id !== e.data.token_id));
+            break;
+          case 'all_devices_revoked':
+            setDevices(prev => prev.filter(d => d.is_current));
+            break;
+          case '2fa_enabled':
+            setIs2FAEnabled(true);
+            break;
+          case '2fa_disabled':
+            setIs2FAEnabled(false);
+            break;
+          case 'trusted_contact_added':
+            setTrustedContacts(prev => [...prev, e.data.contact]);
+            break;
+          case 'trusted_contact_removed':
+            setTrustedContacts(prev => prev.filter(c => c.id !== e.data.contact_id));
+            break;
+          case 'management_mode_changed':
+            setManagementMode(e.data.mode);
+            break;
+          case 'manager_added':
+          case 'manager_updated':
+          case 'manager_removed':
+            fetchOwnershipStatus();
+            break;
+          case 'ownership_transfer_initiated':
+          case 'ownership_transfer_accepted':
+          case 'ownership_transfer_cancelled':
+            fetchOwnershipStatus();
+            break;
+          default:
+            // Refetch all data for unknown events
+            fetchSecurityStatus();
+            fetchOwnershipStatus();
+        }
+      });
+    
+    return () => {
+      echo.leave(channelName);
+    };
+  }, [fetchSecurityStatus, fetchOwnershipStatus]);
+
+  // Handle step-up auth success
+  const handleStepUpSuccess = (token?: string) => {
+    if (token) {
+      setStepUpToken(token);
+    }
+    
+    const action = stepUpAction;
+    setStepUpAction(null);
+    
+    if (action === "delete account") {
+      // Perform account deletion with token
+      console.log("Account deletion confirmed with token:", token);
+      alert("Account deletion would be processed here.");
+    } else if (action === "transfer ownership") {
+      setShowTransferModal(true);
+    } else if (action === "disable 2FA") {
+      // Disable 2FA with step-up token
+      api.delete('/member/account/2fa', { data: { step_up_token: token } })
+        .then(() => {
+          setIs2FAEnabled(false);
+          alert("Two-Factor Authentication disabled.");
+        })
+        .catch(err => alert(parseApiError(err)));
+    }
   };
 
-  const handleRevokeDevice = (id: number) => {
+  // Handle device revocation
+  const handleRevokeDevice = async (id: number) => {
+    setRevokingDevice(id);
+    try {
+      await api.delete(`/member/account/devices/${id}`);
       setDevices(devices.filter(d => d.id !== id));
+    } catch (err) {
+      console.error('Failed to revoke device:', err);
+      alert(parseApiError(err));
+    } finally {
+      setRevokingDevice(null);
+    }
   };
 
-  const handleRevokeAll = () => {
-      setDevices(devices.filter(d => d.current));
+  // Handle revoke all other devices
+  const handleRevokeAll = async () => {
+    if (!confirm('This will sign out all other devices. Continue?')) return;
+    
+    setRevokingAll(true);
+    try {
+      await api.delete('/member/account/devices-others');
+      setDevices(devices.filter(d => d.is_current));
       alert("Signed out of all other devices.");
+    } catch (err) {
+      console.error('Failed to revoke all devices:', err);
+      alert(parseApiError(err));
+    } finally {
+      setRevokingAll(false);
+    }
   };
+
+  // Handle 2FA setup - get QR code
+  const handleSetup2FA = async () => {
+    try {
+      const response = await api.post('/member/account/2fa/setup');
+      setTwoFactorSetup(response.data.data);
+      setShow2FAModal(true);
+    } catch (err) {
+      console.error('Failed to setup 2FA:', err);
+      alert(parseApiError(err));
+    }
+  };
+
+  // Handle 2FA verification
+  const handleVerify2FA = async (code: string): Promise<boolean> => {
+    try {
+      const response = await api.post('/member/account/2fa/verify', { code });
+      setIs2FAEnabled(true);
+      setShow2FAModal(false);
+      setTwoFactorSetup(null);
+      setRecoveryCodes(response.data.data.recovery_codes || []);
+      if (response.data.data.recovery_codes?.length > 0) {
+        setShowRecoveryCodes(true);
+      }
+      return true;
+    } catch (err) {
+      console.error('Failed to verify 2FA:', err);
+      throw new Error(parseApiError(err));
+    }
+  };
+
+  // Handle 2FA disable (requires step-up)
+  const handleToggle2FA = () => {
+    if (!is2FAEnabled) {
+      handleSetup2FA();
+    } else {
+      setStepUpAction('disable 2FA');
+    }
+  };
+
+  // Handle view/regenerate recovery codes
+  const handleViewRecoveryCodes = async () => {
+    try {
+      const response = await api.post('/member/account/2fa/recovery-codes');
+      setRecoveryCodes(response.data.data.recovery_codes);
+      setShowRecoveryCodes(true);
+    } catch (err) {
+      console.error('Failed to get recovery codes:', err);
+      alert(parseApiError(err));
+    }
+  };
+
+  // Handle management mode change
+  const handleManagementModeChange = async (newMode: 'self' | 'family' | 'matchmaker' | 'dual') => {
+    setSavingMode(true);
+    try {
+      await api.put('/member/account/management-mode', { mode: newMode });
+      setManagementMode(newMode);
+    } catch (err) {
+      console.error('Failed to update management mode:', err);
+      alert(parseApiError(err));
+    } finally {
+      setSavingMode(false);
+    }
+  };
+
+  // Handle add trusted contact
+  const handleAddTrustedContact = async (contactData: {
+    name: string;
+    relationship: string;
+    phone?: string;
+    email?: string;
+  }) => {
+    setAddingContact(true);
+    try {
+      const response = await api.post('/member/account/trusted-contacts', contactData);
+      setTrustedContacts(prev => [...prev, response.data.data.contact]);
+      setShowAddContactModal(false);
+    } catch (err) {
+      console.error('Failed to add trusted contact:', err);
+      alert(parseApiError(err));
+    } finally {
+      setAddingContact(false);
+    }
+  };
+
+  // Handle remove trusted contact
+  const handleRemoveTrustedContact = async (contactId: number) => {
+    try {
+      await api.delete(`/member/account/trusted-contacts/${contactId}`);
+      setTrustedContacts(prev => prev.filter(c => c.id !== contactId));
+    } catch (err) {
+      console.error('Failed to remove trusted contact:', err);
+      alert(parseApiError(err));
+    }
+  };
+
+  // Handle ownership transfer initiation
+  const handleInitiateTransfer = async (newOwnerEmail: string, reason: string) => {
+    if (!stepUpToken) {
+      alert('Step-up authentication required.');
+      return;
+    }
+    
+    try {
+      await api.post('/member/account/ownership/transfer', {
+        new_owner_email: newOwnerEmail,
+        reason,
+        step_up_token: stepUpToken
+      });
+      setShowTransferModal(false);
+      setStepUpToken(null);
+      fetchOwnershipStatus();
+      alert('Ownership transfer initiated. The new owner will receive an email.');
+    } catch (err) {
+      console.error('Failed to initiate transfer:', err);
+      alert(parseApiError(err));
+    }
+  };
+
+  // Loading state
+  if (loading) {
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="w-8 h-8 animate-spin text-primary mx-auto mb-4" />
+          <p className="text-slate-500">Loading settings...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Error state
+  if (error) {
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <div className="text-center">
+          <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
+          <p className="text-red-600 font-medium mb-2">Failed to load settings</p>
+          <p className="text-slate-500 text-sm mb-4">{error}</p>
+          <button 
+            onClick={() => { setError(null); fetchSecurityStatus(); fetchOwnershipStatus(); }}
+            className="px-4 py-2 bg-primary text-white rounded-lg font-medium"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden">
@@ -118,12 +486,18 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onLaunchOnboarding, onOpenB
                                         </div>
                                         <div>
                                             <p className="text-sm font-bold text-slate-900">Email Address</p>
-                                            <p className="text-xs text-slate-500">dr.rajesh@example.com</p>
+                                            <p className="text-xs text-slate-500">{securityStatus?.credentials.email || 'Not set'}</p>
                                         </div>
                                     </div>
-                                    <span className="flex items-center gap-1 text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded-full">
-                                        <Check size={12} /> Verified
-                                    </span>
+                                    {securityStatus?.credentials.email_verified ? (
+                                        <span className="flex items-center gap-1 text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded-full">
+                                            <Check size={12} /> Verified
+                                        </span>
+                                    ) : (
+                                        <button className="text-xs font-bold text-orange-600 bg-orange-50 px-2 py-1 rounded-full">
+                                            Verify
+                                        </button>
+                                    )}
                                 </div>
 
                                 <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
@@ -133,12 +507,18 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onLaunchOnboarding, onOpenB
                                         </div>
                                         <div>
                                             <p className="text-sm font-bold text-slate-900">Phone OTP</p>
-                                            <p className="text-xs text-slate-500">+91 98765 XXXXX</p>
+                                            <p className="text-xs text-slate-500">{securityStatus?.credentials.phone || 'Not set'}</p>
                                         </div>
                                     </div>
-                                    <span className="flex items-center gap-1 text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded-full">
-                                        <Check size={12} /> Verified
-                                    </span>
+                                    {securityStatus?.credentials.phone_verified ? (
+                                        <span className="flex items-center gap-1 text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded-full">
+                                            <Check size={12} /> Verified
+                                        </span>
+                                    ) : (
+                                        <button className="text-xs font-bold text-orange-600 bg-orange-50 px-2 py-1 rounded-full">
+                                            Verify
+                                        </button>
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -153,27 +533,45 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onLaunchOnboarding, onOpenB
                             </div>
                             
                             <div className="space-y-3">
-                                {!trustedContact ? (
+                                {trustedContacts.length === 0 ? (
                                     <button 
-                                        onClick={() => setTrustedContact({name: 'Amit Kumar', relation: 'Brother'})}
+                                        onClick={() => setShowAddContactModal(true)}
                                         className="w-full p-3 border-2 border-dashed border-slate-300 rounded-xl flex items-center justify-center gap-2 text-slate-500 hover:border-primary hover:text-primary hover:bg-white transition-all"
                                     >
                                         <UserPlus size={18} />
                                         <span className="text-sm font-bold">Add Trusted Contact</span>
                                     </button>
                                 ) : (
-                                    <div className="p-3 bg-white border border-slate-200 rounded-xl flex justify-between items-center">
-                                        <div className="flex items-center gap-3">
-                                            <div className="size-8 bg-green-100 text-green-600 rounded-full flex items-center justify-center">
-                                                <ShieldCheck size={16} />
+                                    trustedContacts.map(contact => (
+                                        <div key={contact.id} className="p-3 bg-white border border-slate-200 rounded-xl flex justify-between items-center">
+                                            <div className="flex items-center gap-3">
+                                                <div className={`size-8 ${contact.is_verified ? 'bg-green-100 text-green-600' : 'bg-yellow-100 text-yellow-600'} rounded-full flex items-center justify-center`}>
+                                                    <ShieldCheck size={16} />
+                                                </div>
+                                                <div>
+                                                    <p className="text-sm font-bold text-slate-900">{contact.name}</p>
+                                                    <p className="text-xs text-slate-500">
+                                                        {contact.relationship} • {contact.is_verified ? 'Verified' : 'Pending Verification'}
+                                                    </p>
+                                                </div>
                                             </div>
-                                            <div>
-                                                <p className="text-sm font-bold text-slate-900">{trustedContact.name}</p>
-                                                <p className="text-xs text-slate-500">{trustedContact.relation} • Can help recover account</p>
-                                            </div>
+                                            <button 
+                                                onClick={() => handleRemoveTrustedContact(contact.id)} 
+                                                className="text-xs text-red-500 font-bold hover:underline"
+                                            >
+                                                Remove
+                                            </button>
                                         </div>
-                                        <button onClick={() => setTrustedContact(null)} className="text-xs text-red-500 font-bold hover:underline">Remove</button>
-                                    </div>
+                                    ))
+                                )}
+                                {trustedContacts.length > 0 && trustedContacts.length < 3 && (
+                                    <button 
+                                        onClick={() => setShowAddContactModal(true)}
+                                        className="w-full p-2 border border-dashed border-slate-300 rounded-lg flex items-center justify-center gap-2 text-slate-400 hover:border-primary hover:text-primary transition-all text-sm"
+                                    >
+                                        <UserPlus size={14} />
+                                        Add Another Contact ({3 - trustedContacts.length} remaining)
+                                    </button>
                                 )}
                                 <p className="text-xs text-slate-400 leading-relaxed">
                                     Trusted contacts can verify your identity if you lose access to your phone/email.
@@ -188,44 +586,52 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onLaunchOnboarding, onOpenB
                             <h4 className="font-bold text-slate-900 flex items-center gap-2">
                                 <SmartphoneNfc size={18} className="text-slate-600" /> Device Management
                             </h4>
-                            {devices.length > 1 && (
+                            {devices.filter(d => !d.is_current).length > 0 && (
                                 <button 
                                     onClick={handleRevokeAll}
-                                    className="text-xs font-bold text-red-600 border border-red-200 px-3 py-1.5 rounded-lg hover:bg-red-50 transition-colors"
+                                    disabled={revokingAll}
+                                    className="text-xs font-bold text-red-600 border border-red-200 px-3 py-1.5 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50 flex items-center gap-1"
                                 >
+                                    {revokingAll && <Loader2 size={12} className="animate-spin" />}
                                     Sign out other devices
                                 </button>
                             )}
                         </div>
 
                         <div className="space-y-3">
-                            {devices.map(device => (
+                            {devices.length === 0 ? (
+                                <p className="text-sm text-slate-500 text-center py-4">No active sessions</p>
+                            ) : (
+                              devices.map(device => (
                                 <div key={device.id} className="flex items-center justify-between p-3 border border-slate-100 rounded-lg hover:bg-slate-50 transition-colors">
                                     <div className="flex items-center gap-3">
-                                        <div className={`size-10 rounded-full flex items-center justify-center ${device.current ? 'bg-green-100 text-green-600' : 'bg-slate-100 text-slate-500'}`}>
-                                            {device.type === 'mobile' ? <Smartphone size={20} /> : device.type === 'tablet' ? <Tablet size={20} /> : <Laptop size={20} />}
+                                        <div className={`size-10 rounded-full flex items-center justify-center ${device.is_current ? 'bg-green-100 text-green-600' : 'bg-slate-100 text-slate-500'}`}>
+                                            {device.device_type === 'mobile' ? <Smartphone size={20} /> : device.device_type === 'tablet' ? <Tablet size={20} /> : <Laptop size={20} />}
                                         </div>
                                         <div>
                                             <div className="flex items-center gap-2">
-                                                <p className="text-sm font-bold text-slate-900">{device.name}</p>
-                                                {device.current && <span className="text-[10px] font-bold bg-green-100 text-green-700 px-1.5 py-0.5 rounded uppercase tracking-wider">This Device</span>}
+                                                <p className="text-sm font-bold text-slate-900">{device.device_name}</p>
+                                                {device.is_current && <span className="text-[10px] font-bold bg-green-100 text-green-700 px-1.5 py-0.5 rounded uppercase tracking-wider">This Device</span>}
                                             </div>
                                             <p className="text-xs text-slate-500 flex items-center gap-1">
-                                                {device.location} • <span className={device.current ? 'text-green-600 font-bold' : ''}>{device.lastActive}</span>
+                                                {device.location_display} • {device.ip_masked} • <span className={device.is_current ? 'text-green-600 font-bold' : ''}>{device.last_used_display}</span>
                                             </p>
+                                            <p className="text-xs text-slate-400">{device.browser} on {device.os}</p>
                                         </div>
                                     </div>
-                                    {!device.current && (
+                                    {!device.is_current && (
                                         <button 
                                             onClick={() => handleRevokeDevice(device.id)}
-                                            className="text-xs font-bold text-slate-400 hover:text-red-600 p-2 hover:bg-red-50 rounded-lg transition-colors"
+                                            disabled={revokingDevice === device.id}
+                                            className="text-xs font-bold text-slate-400 hover:text-red-600 p-2 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
                                             title="Sign Out"
                                         >
-                                            <LogOut size={16} />
+                                            {revokingDevice === device.id ? <Loader2 size={16} className="animate-spin" /> : <LogOut size={16} />}
                                         </button>
                                     )}
                                 </div>
-                            ))}
+                              ))
+                            )}
                         </div>
 
                         <div className="mt-6 pt-6 border-t border-slate-100">
@@ -261,33 +667,58 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onLaunchOnboarding, onOpenB
                     <SectionHeader title="Profile Roles & Ownership" icon={<Users size={20} className="text-primary" />} />
 
                     <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-                        <h4 className="font-bold text-slate-900 mb-4">Who manages this profile?</h4>
+                        <div className="flex items-center justify-between mb-4">
+                            <h4 className="font-bold text-slate-900">Who manages this profile?</h4>
+                            {savingMode && <Loader2 size={16} className="animate-spin text-primary" />}
+                        </div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
                             <RoleOption 
                                 label="Self Managed" 
                                 desc="I handle all proposals" 
                                 selected={managementMode === 'self'} 
-                                onClick={() => setManagementMode('self')}
+                                onClick={() => handleManagementModeChange('self')}
+                                disabled={savingMode}
                             />
                             <RoleOption 
                                 label="Family Managed" 
                                 desc="Parents manage account" 
                                 selected={managementMode === 'family'} 
-                                onClick={() => setManagementMode('family')}
+                                onClick={() => handleManagementModeChange('family')}
+                                disabled={savingMode}
                             />
                             <RoleOption 
                                 label="Matchmaker (Agent)" 
                                 desc="Professional assistance" 
                                 selected={managementMode === 'matchmaker'} 
-                                onClick={() => setManagementMode('matchmaker')}
+                                onClick={() => handleManagementModeChange('matchmaker')}
+                                disabled={savingMode}
                             />
                             <RoleOption 
                                 label="Dual Control" 
                                 desc="Me + Family approval" 
                                 selected={managementMode === 'dual'} 
-                                onClick={() => setManagementMode('dual')}
+                                onClick={() => handleManagementModeChange('dual')}
+                                disabled={savingMode}
                             />
                         </div>
+
+                        {/* Active Managers List */}
+                        {managers.length > 0 && (
+                            <div className="mb-6 p-4 bg-slate-50 rounded-lg">
+                                <h5 className="text-sm font-bold text-slate-700 mb-3">Active Managers</h5>
+                                <div className="space-y-2">
+                                    {managers.map(manager => (
+                                        <div key={manager.id} className="flex items-center justify-between p-2 bg-white rounded-lg border border-slate-100">
+                                            <div>
+                                                <p className="text-sm font-medium text-slate-800">{manager.manager_name}</p>
+                                                <p className="text-xs text-slate-500 capitalize">{manager.manager_type} • {manager.status}</p>
+                                            </div>
+                                            <span className="text-xs text-slate-400">{manager.permissions.length} permissions</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
 
                         <div className="border-t border-slate-100 pt-6">
                             <h4 className="font-bold text-slate-900 mb-3">Ownership Controls</h4>
@@ -324,25 +755,19 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onLaunchOnboarding, onOpenB
                                     type="checkbox" 
                                     className="sr-only peer" 
                                     checked={is2FAEnabled}
-                                    onChange={() => {
-                                        if (!is2FAEnabled) {
-                                            setShow2FAModal(true);
-                                        } else {
-                                            setIs2FAEnabled(false);
-                                        }
-                                    }}
+                                    onChange={handleToggle2FA}
                                 />
                                 <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
                             </label>
                          </div>
                          <p className="text-xs text-slate-500">
-                             Secure your account with an additional layer of protection via Authenticator App, SMS, or Email.
+                             Secure your account with an additional layer of protection via Authenticator App (Google Authenticator, Authy, etc).
                          </p>
                          {is2FAEnabled && (
                              <div className="mt-4 flex gap-2">
-                                 <button onClick={() => setShow2FAModal(true)} className="text-xs font-bold text-primary hover:underline">Reconfigure</button>
+                                 <button onClick={handleSetup2FA} className="text-xs font-bold text-primary hover:underline">Reconfigure</button>
                                  <span className="text-slate-300">|</span>
-                                 <button className="text-xs font-bold text-slate-500 hover:text-slate-800">View Backup Codes</button>
+                                 <button onClick={handleViewRecoveryCodes} className="text-xs font-bold text-slate-500 hover:text-slate-800">View Backup Codes</button>
                              </div>
                          )}
                     </div>
@@ -728,6 +1153,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onLaunchOnboarding, onOpenB
         </div>
       </div>
 
+      {/* Modals */}
       {showVerification && <VerificationModal onClose={() => setShowVerification(false)} />}
       {stepUpAction && (
           <StepUpVerificationModal 
@@ -736,13 +1162,31 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onLaunchOnboarding, onOpenB
             onVerified={handleStepUpSuccess}
           />
       )}
-      {show2FAModal && (
+      {show2FAModal && twoFactorSetup && (
           <TwoFactorSetupModal 
-            onClose={() => setShow2FAModal(false)}
-            onComplete={() => {
-                setIs2FAEnabled(true);
-                setShow2FAModal(false);
-            }}
+            qrCodeSvg={twoFactorSetup.qr_code_svg}
+            secret={twoFactorSetup.secret}
+            onClose={() => { setShow2FAModal(false); setTwoFactorSetup(null); }}
+            onVerify={handleVerify2FA}
+          />
+      )}
+      {showRecoveryCodes && recoveryCodes.length > 0 && (
+          <RecoveryCodesModal 
+            codes={recoveryCodes}
+            onClose={() => { setShowRecoveryCodes(false); setRecoveryCodes([]); }}
+          />
+      )}
+      {showAddContactModal && (
+          <AddTrustedContactModal
+            onClose={() => setShowAddContactModal(false)}
+            onAdd={handleAddTrustedContact}
+            loading={addingContact}
+          />
+      )}
+      {showTransferModal && (
+          <OwnershipTransferModal
+            onClose={() => { setShowTransferModal(false); setStepUpToken(null); }}
+            onTransfer={handleInitiateTransfer}
           />
       )}
     </div>
@@ -789,11 +1233,12 @@ const AccessRow: React.FC<{name: string, accessType: string, time: string}> = ({
     </div>
 );
 
-const RoleOption: React.FC<{label: string, desc: string, selected: boolean, onClick: () => void}> = ({ label, desc, selected, onClick }) => (
+const RoleOption: React.FC<{label: string, desc: string, selected: boolean, onClick: () => void, disabled?: boolean}> = ({ label, desc, selected, onClick, disabled }) => (
     <div 
-        onClick={onClick}
+        onClick={disabled ? undefined : onClick}
         className={`
-            p-3 rounded-lg border cursor-pointer transition-all
+            p-3 rounded-lg border transition-all
+            ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
             ${selected ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-slate-200 hover:border-slate-300'}
         `}
     >
@@ -853,5 +1298,240 @@ const PrivacyListRow: React.FC<{icon: React.ReactNode, label: string, value: str
         </div>
     </div>
 );
+
+// Recovery Codes Modal
+const RecoveryCodesModal: React.FC<{ codes: string[]; onClose: () => void }> = ({ codes, onClose }) => {
+    const [copied, setCopied] = useState(false);
+    
+    const handleCopy = () => {
+        navigator.clipboard.writeText(codes.join('\n'));
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
+    
+    return (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+                <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-bold text-slate-900">Recovery Codes</h3>
+                    <button onClick={onClose} className="p-1 hover:bg-slate-100 rounded-full">
+                        <X size={20} className="text-slate-500" />
+                    </button>
+                </div>
+                
+                <p className="text-sm text-slate-600 mb-4">
+                    Save these codes in a secure place. Each code can only be used once to access your account if you lose your authenticator.
+                </p>
+                
+                <div className="bg-slate-50 rounded-lg p-4 mb-4">
+                    <div className="grid grid-cols-2 gap-2">
+                        {codes.map((code, i) => (
+                            <div key={i} className="font-mono text-sm text-slate-800 bg-white px-3 py-2 rounded border border-slate-200">
+                                {code}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+                
+                <div className="flex gap-3">
+                    <button 
+                        onClick={handleCopy}
+                        className="flex-1 flex items-center justify-center gap-2 py-2 border border-slate-200 rounded-lg font-medium text-sm hover:bg-slate-50"
+                    >
+                        <Copy size={16} />
+                        {copied ? 'Copied!' : 'Copy All'}
+                    </button>
+                    <button 
+                        onClick={onClose}
+                        className="flex-1 py-2 bg-primary text-white rounded-lg font-medium text-sm hover:bg-primary/90"
+                    >
+                        Done
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// Add Trusted Contact Modal
+const AddTrustedContactModal: React.FC<{
+    onClose: () => void;
+    onAdd: (data: { name: string; relationship: string; phone?: string; email?: string }) => void;
+    loading: boolean;
+}> = ({ onClose, onAdd, loading }) => {
+    const [name, setName] = useState('');
+    const [relationship, setRelationship] = useState('');
+    const [phone, setPhone] = useState('');
+    const [email, setEmail] = useState('');
+    
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        onAdd({ name, relationship, phone: phone || undefined, email: email || undefined });
+    };
+    
+    return (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+                <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-bold text-slate-900">Add Trusted Contact</h3>
+                    <button onClick={onClose} className="p-1 hover:bg-slate-100 rounded-full">
+                        <X size={20} className="text-slate-500" />
+                    </button>
+                </div>
+                
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Full Name</label>
+                        <input
+                            type="text"
+                            value={name}
+                            onChange={(e) => setName(e.target.value)}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                            placeholder="Enter contact's name"
+                            required
+                        />
+                    </div>
+                    
+                    <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Relationship</label>
+                        <select
+                            value={relationship}
+                            onChange={(e) => setRelationship(e.target.value)}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                            required
+                        >
+                            <option value="">Select relationship</option>
+                            <option value="parent">Parent</option>
+                            <option value="sibling">Sibling</option>
+                            <option value="spouse">Spouse</option>
+                            <option value="relative">Other Relative</option>
+                            <option value="friend">Close Friend</option>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Phone (Optional)</label>
+                        <input
+                            type="tel"
+                            value={phone}
+                            onChange={(e) => setPhone(e.target.value)}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                            placeholder="+91 98765 43210"
+                        />
+                    </div>
+                    
+                    <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Email (Optional)</label>
+                        <input
+                            type="email"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                            placeholder="contact@example.com"
+                        />
+                    </div>
+                    
+                    <div className="flex gap-3 pt-2">
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className="flex-1 py-2 border border-slate-200 rounded-lg font-medium text-sm hover:bg-slate-50"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            type="submit"
+                            disabled={loading || !name || !relationship}
+                            className="flex-1 py-2 bg-primary text-white rounded-lg font-medium text-sm hover:bg-primary/90 disabled:opacity-50 flex items-center justify-center gap-2"
+                        >
+                            {loading && <Loader2 size={16} className="animate-spin" />}
+                            Add Contact
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+};
+
+// Ownership Transfer Modal
+const OwnershipTransferModal: React.FC<{
+    onClose: () => void;
+    onTransfer: (email: string, reason: string) => void;
+}> = ({ onClose, onTransfer }) => {
+    const [email, setEmail] = useState('');
+    const [reason, setReason] = useState('');
+    const [loading, setLoading] = useState(false);
+    
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setLoading(true);
+        await onTransfer(email, reason);
+        setLoading(false);
+    };
+    
+    return (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+                <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-bold text-slate-900">Transfer Profile Ownership</h3>
+                    <button onClick={onClose} className="p-1 hover:bg-slate-100 rounded-full">
+                        <X size={20} className="text-slate-500" />
+                    </button>
+                </div>
+                
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4">
+                    <p className="text-sm text-yellow-800">
+                        <strong>Warning:</strong> This will transfer full ownership of this profile to another user. This action cannot be undone without the new owner's consent.
+                    </p>
+                </div>
+                
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">New Owner's Email</label>
+                        <input
+                            type="email"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                            placeholder="newowner@example.com"
+                            required
+                        />
+                    </div>
+                    
+                    <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Reason for Transfer</label>
+                        <textarea
+                            value={reason}
+                            onChange={(e) => setReason(e.target.value)}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                            placeholder="e.g., Passing control back to the candidate"
+                            rows={3}
+                            required
+                        />
+                    </div>
+                    
+                    <div className="flex gap-3 pt-2">
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className="flex-1 py-2 border border-slate-200 rounded-lg font-medium text-sm hover:bg-slate-50"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            type="submit"
+                            disabled={loading || !email || !reason}
+                            className="flex-1 py-2 bg-red-600 text-white rounded-lg font-medium text-sm hover:bg-red-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                        >
+                            {loading && <Loader2 size={16} className="animate-spin" />}
+                            Transfer Ownership
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+};
 
 export default SettingsView;

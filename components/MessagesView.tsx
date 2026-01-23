@@ -1,58 +1,166 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Search, Phone, Video, MoreVertical, Mic, Image, Smile, Send, 
   CheckCheck, Clock, ShieldAlert, Sparkles, FileText, Lock, Eye, EyeOff,
-  ChevronLeft, Plus, Users, Calendar
+  ChevronLeft, Plus, Users, Calendar, Loader2
 } from 'lucide-react';
-import { MOCK_CHATS, CURRENT_USER } from '../constants';
+import { CURRENT_USER } from '../constants';
 import { Chat, Message } from '../types';
 import CallModal from './CallModal';
+import chatService from '../services/chatService';
+import echo from '../services/echo';
+import { useAuthStore } from '../store/useAuthStore';
 
 const MessagesView: React.FC = () => {
+  const { user } = useAuthStore();
   const [activeTab, setActiveTab] = useState<'primary' | 'requests'>('primary');
-  const [selectedChatId, setSelectedChatId] = useState<string | null>(MOCK_CHATS[0].id);
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Record<string, Message[]>>({});
+  const [loading, setLoading] = useState(true);
+  const [messagesLoading, setMessagesLoading] = useState(false);
   const [inputText, setInputText] = useState('');
   const [showCallModal, setShowCallModal] = useState<'video' | 'audio' | null>(null);
-  
-  // Simulated local messages state for demo
-  const [messages, setMessages] = useState<Record<string, Message[]>>({
-    '1': [
-        { id: '1', senderId: '1', text: "Hi Dr. Kumar, I reviewed your profile. Impressive work on the cardio research!", type: 'text', timestamp: '10:30 AM', status: 'read' },
-        { id: '2', senderId: 'me', text: "Thank you Dr. Aditi! I'm glad you found it interesting. I see you're also into hiking?", type: 'text', timestamp: '10:35 AM', status: 'read' },
-        { id: '3', senderId: '1', text: "Yes! I go to the Himalayas once a year. Would love to chat more about it.", type: 'text', timestamp: '10:36 AM', status: 'read' },
-        { id: '4', senderId: 'me', text: "That sounds wonderful. Are you free for a quick call this weekend?", type: 'text', timestamp: '10:40 AM', status: 'read' },
-        { id: '5', senderId: '1', text: "That sounds perfect! Saturday works for me.", type: 'text', timestamp: '10:42 AM', status: 'read' },
-        { id: '6', senderId: 'system', text: "Dealbreaker Check: Dr. Aditi has verified 'Vegetarian' diet.", type: 'prompt', timestamp: '10:43 AM', status: 'read' }
-    ],
-    '2': [
-        { id: '1', senderId: '2', text: "Namaste beta, we liked your profile.", type: 'text', timestamp: 'Yesterday', status: 'read' },
-        { id: '2', senderId: 'me', text: "Namaste Aunty ji.", type: 'text', timestamp: 'Yesterday', status: 'read' },
-        { id: '3', senderId: '2', text: "Shared a family photo album", type: 'text', isSensitive: true, mediaUrl: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2', timestamp: 'Yesterday', status: 'read' }
-    ]
-  });
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const selectedChat = MOCK_CHATS.find(c => c.id === selectedChatId);
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, selectedChatId]);
+
+  // Fetch chat list on mount
+  useEffect(() => {
+    fetchChats();
+  }, []);
+
+  const fetchChats = async () => {
+    try {
+      setLoading(true);
+      const response = await chatService.getChatList();
+      const mappedChats: Chat[] = response.data.map((thread: any) => ({
+        id: thread.id.toString(),
+        participants: [{
+          name: thread.member_name,
+          avatarUrl: thread.member_photo
+        }],
+        lastMessage: {
+          id: `last-${thread.id}`,
+          senderId: '',
+          text: thread.last_message,
+          timestamp: thread.last_message_time,
+          type: 'text',
+          status: 'read'
+        },
+        unreadCount: thread.unseen_message_count,
+        type: 'direct',
+        isOnline: thread.active === 1,
+        isRequest: thread.is_request
+      }));
+      setChats(mappedChats);
+      if (mappedChats.length > 0 && !selectedChatId) {
+        setSelectedChatId(mappedChats[0].id);
+      }
+    } catch (error) {
+      console.error("Failed to fetch chats", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch messages and subscribe to real-time events
+  useEffect(() => {
+    if (selectedChatId) {
+      fetchMessages(selectedChatId);
+
+      // Subscribe to Private Channel
+      const channel = echo.private(`chat.${selectedChatId}`)
+        .listen('.message.sent', (data: any) => {
+            const newMessage: Message = {
+                id: data.message.id.toString(),
+                senderId: data.message.sender_user_id === user?.id ? 'me' : data.message.sender_user_id.toString(),
+                text: data.message.message,
+                type: 'text',
+                timestamp: data.message.created_at_human,
+                status: 'read'
+            };
+            
+            setMessages(prev => ({
+                ...prev,
+                [selectedChatId]: [...(prev[selectedChatId] || []), newMessage]
+            }));
+
+            // Also update the chat list last message
+            setChats(prev => prev.map(chat => 
+                chat.id === selectedChatId 
+                ? { ...chat, lastMessage: { ...chat.lastMessage, text: newMessage.text, timestamp: newMessage.timestamp } } 
+                : chat
+            ));
+        });
+
+      return () => {
+        echo.leave(`chat.${selectedChatId}`);
+      };
+    }
+  }, [selectedChatId]);
+
+  const fetchMessages = async (threadId: string) => {
+    try {
+      setMessagesLoading(true);
+      const response = await chatService.getChatView(threadId);
+      
+      const mappedMessages: Message[] = response.data.messages.data.map((msg: any) => ({
+        id: msg.id.toString(),
+        senderId: msg.sender_user_id === user?.id ? 'me' : msg.sender_user_id.toString(),
+        text: msg.message,
+        type: 'text',
+        timestamp: msg.created_at_human,
+        status: msg.seen ? 'read' : 'sent',
+      })).reverse();
+
+      setMessages(prev => ({ ...prev, [threadId]: mappedMessages }));
+    } catch (error) {
+      console.error("Failed to fetch messages", error);
+    } finally {
+      setMessagesLoading(false);
+    }
+  };
+
+  const selectedChat = chats.find(c => c.id === selectedChatId);
   const currentMessages = selectedChatId ? messages[selectedChatId] || [] : [];
   
-  const displayedChats = MOCK_CHATS.filter(c => 
+  const displayedChats = chats.filter(c => 
     activeTab === 'requests' ? c.isRequest : !c.isRequest
   );
 
-  const handleSendMessage = () => {
+  const handleSendMessage = async () => {
     if (!inputText.trim() || !selectedChatId) return;
-    const newMessage: Message = {
-        id: Date.now().toString(),
-        senderId: 'me',
-        text: inputText,
-        type: 'text',
-        timestamp: 'Just now',
-        status: 'sent'
-    };
-    setMessages(prev => ({
-        ...prev,
-        [selectedChatId]: [...(prev[selectedChatId] || []), newMessage]
-    }));
+
+    const textToSendMessage = inputText;
     setInputText('');
+
+    try {
+      const response = await chatService.sendMessage(selectedChatId, textToSendMessage);
+      // Backend returns its own message object, we can wait for Echo or add optimistically
+      // Here we add optimistically for smoothness
+      const optimisticMessage: Message = {
+          id: Date.now().toString(),
+          senderId: 'me',
+          text: textToSendMessage,
+          type: 'text',
+          timestamp: 'Just now',
+          status: 'sent'
+      };
+
+      setMessages(prev => ({
+          ...prev,
+          [selectedChatId]: [...(prev[selectedChatId] || []), optimisticMessage]
+      }));
+    } catch (error) {
+      console.error("Failed to send message", error);
+    }
   };
 
   return (
@@ -86,7 +194,11 @@ const MessagesView: React.FC = () => {
                 className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-colors flex items-center justify-center gap-1.5 ${activeTab === 'requests' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100'}`}
             >
                 Requests
-                <span className="bg-primary text-white text-[9px] px-1.5 rounded-full">1</span>
+                {chats.filter(c => c.isRequest).length > 0 && (
+                  <span className="bg-primary text-white text-[9px] px-1.5 rounded-full">
+                    {chats.filter(c => c.isRequest).length}
+                  </span>
+                )}
             </button>
         </div>
 
@@ -170,9 +282,14 @@ const MessagesView: React.FC = () => {
                       </div>
                   </div>
 
-                  {currentMessages.map((msg) => (
-                      <MessageBubble key={msg.id} message={msg} />
-                  ))}
+                  {messagesLoading ? (
+                    <div className="flex justify-center py-4"><Loader2 className="animate-spin text-slate-300" /></div>
+                  ) : (
+                    currentMessages.map((msg) => (
+                        <MessageBubble key={msg.id} message={msg} />
+                    ))
+                  )}
+                  <div ref={messagesEndRef} />
               </div>
 
               {/* Input Area */}
