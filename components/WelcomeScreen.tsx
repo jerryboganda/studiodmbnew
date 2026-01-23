@@ -145,10 +145,16 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
       }
   };
 
-  const handleOtpVerify = async () => {
+  const handleOtpVerify = async (codeOverride?: string) => {
       setIsLoading(true);
       setError('');
-      const code = otp.join('');
+      let code = (codeOverride ?? otp.join('')).replace(/\D/g, '');
+      if (code.length < 6) {
+          const refCode = otpRefs.current.map((el) => el?.value ?? '').join('').replace(/\D/g, '');
+          if (refCode.length >= 6) {
+              code = refCode;
+          }
+      }
       if (code.length < 6) {
           setError('Please enter the complete 6-digit code');
           setIsLoading(false);
@@ -320,7 +326,8 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
           otpRefs.current[idx + 1]?.focus();
       } else if (val && idx === 5) {
           // Trigger verification automatically when last digit is filled
-          setTimeout(() => handleOtpVerify(), 100);
+          const code = newOtp.join('');
+          setTimeout(() => handleOtpVerify(code), 100);
       }
   };
 
